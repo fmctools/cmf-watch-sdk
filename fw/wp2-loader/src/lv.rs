@@ -166,7 +166,13 @@ pub fn tick() {
     let buf = unsafe {
         core::slice::from_raw_parts(REQ_PTR.load(Ordering::Relaxed) as *const u8, REQ_LEN.load(Ordering::Relaxed) as usize)
     };
-    RESULT.store(run(buf), Ordering::Relaxed);
+    // Storage runs on ui_service too: forced app stop cannot abort a filesystem operation midway.
+    let result=if let Some((op,index,field))=wp2_core::storage::legacy_request(buf) {
+        crate::storage::query(op,index,field)
+    } else if wp2_core::storage::request(buf).is_some() {
+        crate::storage::execute(unsafe {core::slice::from_raw_parts_mut(REQ_PTR.load(Ordering::Relaxed) as *mut u8,buf.len())})
+    } else {run(buf)};
+    RESULT.store(result, Ordering::Relaxed);
     STATE.store(DONE, Ordering::Release);
 }
 
@@ -306,6 +312,7 @@ fn exec(r: &Rec) -> Result<(), i32> {
                 s.objs[x] = null_mut();
             }
         }
+        Rec::AppIcon {h,slot,side} => crate::menu::lv::app_icon(o(h),slot,side)?,
         Rec::Size { h, w, hh } => stock!(LV_OBJ_SET_SIZE, fn(Obj, i32, i32))(o(h), w, hh),
         Rec::Align { h, align, x, y } => stock!(LV_OBJ_ALIGN, fn(Obj, u32, i32, i32))(o(h), align.into(), x.into(), y.into()),
         Rec::Flags { h, set, clear } => {

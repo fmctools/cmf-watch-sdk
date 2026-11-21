@@ -40,3 +40,8 @@ only behind it, the hardware ignores it (`docs/recon.md`, applist-style). The bl
 cache, then shown by `lv_img_create` + `lv_img_set_src` with an `lv_img_dsc_t` kept in the loader block. Blocks are
 freed after the menu's objects on view delete. Cost: 27 712 B of `RES` per icon while the menu exists (also while
 an app runs from it).
+
+
+## Showing another installed app
+
+Apps can use `Batch::installed_app_icon(object, slot, IconSize::Native)` with the storage-inspection loader. This is separate from declaring the app's own launcher icon. See [Storage inspection](storage-inspection.md) for capability checks, supported sizes, fallback and lifetime rules.

@@ -118,7 +118,9 @@ pub fn stop_app() {
     media::stop();
     svc::stop();
     // LVGL keeps no object, callback or font of the app once its block is gone
+    crate::storage::stop();
     lv::teardown();
+    crate::menu::lv::clear_app_icons();
     let ram = stub_ram();
     unsafe { heap::free(RES, ram.app_block as *mut u8) };
     ram.app_block = 0;

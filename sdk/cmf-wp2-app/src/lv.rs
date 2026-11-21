@@ -7,6 +7,11 @@
 //!
 //! Open fonts in a batch of their own (`font`, `submit`): a font file that fails to open stops the batch there.
 
+/// Installed-app icon sizes. Native reuses existing validated pixels.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(u8)]
+pub enum IconSize { Thumbnail=64, Native=96 }
+
 use core::sync::atomic::{AtomicBool, Ordering};
 
 /// Batch buffer size; a record that does not fit gives [`LvError::Full`]: submit and continue.
@@ -457,6 +462,26 @@ impl Batch {
         self.put(0x12, obj.0, &[&[mode as u8]])
     }
 
+    /// Display a validated installed app icon by actual slot, independent of menu order.
+    /// Requires storage-inspection service v1. Missing/unloadable icons leave the background empty.
+    pub fn installed_app_icon(
+        &mut self,
+        obj: Obj,
+        slot: u8,
+        size: IconSize,
+    ) -> Result<(), LvError> {
+        self.put(0x1A, obj.0, &[&[slot, size as u8]])
+    }
+
+    /// Compatibility alias for the original local icon API.
+    pub fn app_icon(&mut self, obj: Obj, slot: u8) -> Result<(), LvError> {
+        self.put(0x1A, obj.0, &[&[slot]])
+    }
+    /// Compatibility alias for the original local icon API.
+    pub fn app_icon_native(&mut self, obj: Obj, slot: u8) -> Result<(), LvError> {
+        self.installed_app_icon(obj, slot, IconSize::Native)
+    }
+
     /// Drops the records not submitted yet. Their handles stay taken: use it only for records the loader has
     /// already seen another way (host tests), or not at all.
     pub fn clear(&mut self) {
@@ -479,6 +504,14 @@ mod tests {
 
     fn batch() -> Batch {
         Batch::with_buf(Box::leak(Box::new([0; BUF])))
+    }
+
+    #[test]
+    fn installed_icon_aliases_keep_the_preview_wire_format() {
+        let mut b=batch();let o=b.create(Class::Obj,ROOT).unwrap();b.clear();
+        b.app_icon(o,7).unwrap();assert_eq!(b.bytes(),&[0x1A,1,o.0 as u8,0,7]);b.clear();
+        b.app_icon_native(o,7).unwrap();assert_eq!(b.bytes(),&[0x1A,2,o.0 as u8,0,7,96]);b.clear();
+        b.installed_app_icon(o,15,IconSize::Thumbnail).unwrap();assert_eq!(b.bytes(),&[0x1A,2,o.0 as u8,0,15,64]);
     }
 
     /// One record of every op (CREATE … ANGLES) after the spec's example batch.

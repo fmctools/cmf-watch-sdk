@@ -51,3 +51,8 @@ uv run --locked python -m unittest discover -s tests -v
 (cd sdk && cargo test --target aarch64-apple-darwin)
 (cd fw && cargo test -p wp2-core --target aarch64-apple-darwin)
 ```
+
+
+## Read-only inspection additions
+
+`docs/storage-inspection.md` defines the typed storage/catalog service and installed-app icon record. New code probes with `Storage::open`; ABI minor alone is not a capability check. Keep old commands, package/Api layouts and the scalar-preview compatibility path working. Filesystem totals are data-cluster capacity; partition reservations and logical file lengths are different measures. UI-thread serialization and app-stop cleanup must be retained. Do not claim this WP2 backend works on another firmware or watch without deriving and testing its stock calls.

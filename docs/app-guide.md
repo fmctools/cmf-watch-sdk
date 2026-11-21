@@ -1084,3 +1084,8 @@ battery use with `keep_screen_on` or a polling daemon.
       object after a roller, nothing relies on a rightward slider drag.
 - [ ] `icon.svg` present (or the letter fallback is intended), version bumped, host tests pass, the e2e or a manual
       emulator run covers start, input, pause and exit.
+
+
+## Read-only storage and installed-app icons
+
+The additive loader service in [Storage inspection](storage-inspection.md) exposes typed capacity, partition, installed-app and bounded file-scan APIs. `Storage::open` detects support; older loaders return `UNSUPPORTED`. `Batch::installed_app_icon` can display another installed app's icon by slot. No firmware or API-table change is required.

@@ -19,3 +19,5 @@ pub mod pkg;
 pub mod proto;
 pub mod pwm;
 pub mod stock;
+
+pub mod storage;

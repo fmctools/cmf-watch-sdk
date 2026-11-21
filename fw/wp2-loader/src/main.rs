@@ -23,6 +23,7 @@ mod menu;
 #[cfg(target_os = "none")]
 mod motor;
 #[cfg(target_os = "none")]
+mod storage;
 mod svc;
 #[cfg(target_os = "none")]
 mod ui;
