@@ -13,6 +13,10 @@ try:
 except (FileNotFoundError, ImportError):
     STOCK = None
 HAVE_STOCK = STOCK is not None
+try:
+    STOCK_WP3 = paths.stock_app_wp3()
+except (FileNotFoundError, ImportError):
+    STOCK_WP3 = None
 
 
 def fake_stub(boot=0x1025A0A1, ble=0x1025A0C1, view_proc=0x1025A0E1, view_name=0x1025A100, applist=0, widget=0,
@@ -302,6 +306,30 @@ class FirmwareTest(unittest.TestCase):
     def test_wf_guard_call_is_stock(self):
         at = firmware.WFM_PARA_CALL - 0x10000000
         self.assertEqual(STOCK[at:at + 4], firmware.thumb_bl(firmware.WFM_PARA_CALL, firmware.STOCK_WFM_PARA_LOAD))
+
+    def test_wp3_guard_call_patched(self):
+        at, hook = firmware.WP3_WFM_PARA_CALL - 0x10000000, 0x102BD288
+        app = bytearray(firmware.WP3_STUB_OFFSET)
+        app[at:at + 4] = firmware.thumb_bl(firmware.WP3_WFM_PARA_CALL, firmware.WP3_STOCK_WFM_PARA_LOAD)
+        out = bytearray(app)
+        firmware.add_stub_wp3(out, b"WP3S" + struct.pack("<II", 1, hook | 1) + bytes(0x40))
+        self.assertEqual(out[at:at + 4], firmware.thumb_bl(firmware.WP3_WFM_PARA_CALL, hook))
+        self.assertEqual({i for i in range(len(app)) if out[i] != app[i]}, set(range(at, at + 4)))
+        for bad in (b"WP2S" + struct.pack("<II", 1, hook | 1), b"WP3S" + struct.pack("<II", 1, hook),
+                    b"WP3S" + struct.pack("<II", 1, 0x1025A0C1)):
+            with self.assertRaisesRegex(ValueError, "stub"):
+                firmware.add_stub_wp3(bytearray(app), bad + bytes(0x40))
+
+    @skipUnless(STOCK_WP3 is not None, "needs JX402_w3pro_V1.0.1.77.bin")
+    def test_wp3_stock_patch(self):
+        at = firmware.WP3_WFM_PARA_CALL - 0x10000000
+        self.assertEqual(len(STOCK_WP3), firmware.WP3_STUB_OFFSET)
+        self.assertEqual(STOCK_WP3[at:at + 4],
+                         firmware.thumb_bl(firmware.WP3_WFM_PARA_CALL, firmware.WP3_STOCK_WFM_PARA_LOAD))
+        out = firmware.patch_wp3(STOCK_WP3, b"WP3S" + struct.pack("<II", 1, 0x102BD289) + bytes(0x40))
+        firmware.check_acth(out)
+        with self.assertRaisesRegex(ValueError, "sha256"):
+            firmware.patch_wp3(STOCK, b"WP3S")
 
     def test_widget_slot_patched(self):
         slot = firmware.WGT_REG + 4 * firmware.WGT_ID - 0x10000000

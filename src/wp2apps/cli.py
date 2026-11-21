@@ -45,6 +45,12 @@ def cmd_firmware(args):
     if args.motor_only and args.stub:
         raise ValueError("--motor-only takes no --stub")
     stub = args.stub.read_bytes() if args.stub else None
+    if args.model == "wp3":
+        if not stub or args.motor_only or args.motor != 1000:
+            raise ValueError("--model wp3 takes only --stub (target/wp3-stub.bin)")
+        with args.output.open("xb") as out:
+            out.write(firmware.patch_wp3(paths.stock_app_wp3(), stub))
+        return
     motor = None if args.motor == 1000 else args.motor
     data = firmware.patch(paths.stock_app(), stub, motor=motor, reserve=not args.motor_only, weak=None if args.motor_only else args.weak or None)
     with args.output.open("xb") as out:
@@ -314,6 +320,8 @@ def parser():
     order.set_defaults(handler=cmd_order)
     fw = commands.add_parser("firmware", help="Patch the stock app.bin (heap reservation, stub, motor strength, weak vibration level)")
     fw.add_argument("--stub", type=Path)
+    fw.add_argument("--model", choices=("wp2", "wp3"), default="wp2",
+                    help="wp3: Watch 3 Pro 1.0.1.77, only the boot watch face guard stub (fw/wp3-stub)")
     fw.add_argument("--motor", type=int, default=1000, metavar="PERMILLE",
                     help="stock vibrations at this share of their strength (default 1000: stock)")
     fw.add_argument("--weak", type=int, default=350, metavar="PERMILLE",

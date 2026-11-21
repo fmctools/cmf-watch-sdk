@@ -22,7 +22,7 @@ pub struct StubHeader {
     /// wgt_reg entry for the free widget id 0x40 (card.rs); was reserved (0) before
     widget: &'static card::WgtReg,
     /// version 2: replaces `bl WfmPara_Load` in WFManager_Init (wfguard.rs)
-    wf_para_load: extern "C" fn(*mut [u8; wp2_core::wfguard::PARA_SIZE]) -> i32,
+    wf_para_load: extern "C" fn(*mut u8) -> i32,
 }
 
 unsafe impl Sync for StubHeader {}

@@ -242,15 +242,4 @@ pub const LV_STYLE_BG_IMG_SRC: u32 = 0x28;
 // (indev) -> gesture direction; (indev): wait for release, as the stock popup's gesture close does
 pub const LV_INDEV_GET_GESTURE_DIR: u32 = 0x101C_4F7D;
 pub const LV_INDEV_WAIT_RELEASE: u32 = 0x101C_4FD5;
-// Watch face manager (docs/recon.md, "Watch face boot guard"). WFManager_Init (0x100DE020, once, ui_service) calls
-// WfmPara_Load(para) at 0x100DE068: 0 when the saved list (RAM mirror 0x3800BC9D) is valid. WfmPara_Save(para)
-// sets magic and checksum and copies it back to the mirror (asserts on count 0). FACE_ATT(id): the att byte a list
-// entry keeps (wfc header +0x17).
-pub const WFM_PARA_LOAD: u32 = 0x100D_EB35;
-pub const WFM_PARA_SAVE: u32 = 0x100D_EBC5;
-pub const WFM_FACE_ATT: u32 = 0x100D_C6B1;
-// data_storage(type, -1): writes the type's RAM buffer as a new record of its NOR ring. WfmPara lives in type 1
-// (0x3800ACD0, 0x12F8 B, NOR 0x488000), which the stock writes only at power-off, the menu reboot, a fault and a
-// factory reset (0x100C6234, 0x100C62D8); AT REBOOT and a watchdog reset lose a list change made since.
-pub const DATA_STORAGE_WRITE: u32 = 0x101B_5A6F;
-pub const STORAGE_SETTINGS: u32 = 1;
+// Watch face manager and data_storage: wfguard.rs (Device)

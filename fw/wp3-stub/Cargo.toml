@@ -1,0 +1,14 @@
+[package]
+name = "wp3-stub"
+description = "Stub appended to the Watch 3 Pro stock app.bin: the boot watch face guard only"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[dependencies]
+wp2-core = { path = "../wp2-core" }
+
+[[bin]]
+name = "wp3-stub"
+test = false
+bench = false

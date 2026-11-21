@@ -34,6 +34,14 @@ BLE_CALL = 0x100D34F0
 WFM_PARA_CALL = 0x100DE068
 STOCK_WFM_PARA_LOAD = 0x100DEB34
 STOCK_BLE_READ = 0x100CC284
+# Watch 3 Pro jx402_08 1.0.1.77 (wp2-core wfguard.rs WP3): the stub goes at the end of app.bin, WFManager_Init
+# (0x100D6DAC) calls WfmPara_Load (0x100D7990) once per boot at 0x100D6DF4
+WP3_STOCK_SHA256_PREFIX = "815a21fc80aa3941"
+WP3_STUB_OFFSET = 0x2BD280
+WP3_STUB_MAX = 0x1000
+WP3_STUB_HEADER = struct.Struct("<4sII")
+WP3_WFM_PARA_CALL = 0x100D6DF4
+WP3_STOCK_WFM_PARA_LOAD = 0x100D7990
 # list style descriptor +0xC: its layout; waterfall (0x101EB184) is not covered
 APPLIST_LAYOUT = 0x101EB160
 STOCK_APPLIST_LAYOUT = 0x1005EEE5
@@ -268,6 +276,32 @@ def add_stub(out: bytearray, stub: bytes) -> None:
         put(out, WGT_REG + 4 * WGT_ID, bytes(4), struct.pack("<I", widget))
     if wf_para:
         put(out, WFM_PARA_CALL, thumb_bl(WFM_PARA_CALL, STOCK_WFM_PARA_LOAD), thumb_bl(WFM_PARA_CALL, wf_para & ~1))
+
+
+def patch_wp3(app: bytes, stub: bytes) -> bytes:
+    """Watch 3 Pro: appends fw/wp3-stub (the boot watch face guard only) and points `bl WfmPara_Load` at it."""
+    if not hashlib.sha256(app).hexdigest().startswith(WP3_STOCK_SHA256_PREFIX):
+        raise ValueError("not the stock jx402_08 1.0.1.77 app.bin (sha256 mismatch)")
+    out = bytearray(app)
+    add_stub_wp3(out, stub)
+    fix_acth(out)
+    check_acth(out)
+    return bytes(out)
+
+
+def add_stub_wp3(out: bytearray, stub: bytes) -> None:
+    magic, version, wf_para = WP3_STUB_HEADER.unpack_from(stub)
+    base = APP_VBASE + WP3_STUB_OFFSET
+    if magic != b"WP3S" or version != 1 or not wf_para & 1 or not base <= wf_para & ~1 < base + len(stub):
+        raise ValueError("bad stub header")
+    if len(stub) > WP3_STUB_MAX:
+        raise ValueError(f"stub takes {len(stub):#x} bytes; the limit is {WP3_STUB_MAX:#x}")
+    if len(out) != WP3_STUB_OFFSET:
+        raise ValueError(f"app.bin is {len(out):#x} bytes; the stub goes at {WP3_STUB_OFFSET:#x}")
+    out += stub
+    out += bytes(-len(out) % 4)
+    put(out, WP3_WFM_PARA_CALL, thumb_bl(WP3_WFM_PARA_CALL, WP3_STOCK_WFM_PARA_LOAD),
+        thumb_bl(WP3_WFM_PARA_CALL, wf_para & ~1))
 
 
 def changed_ranges(old: bytes, new: bytes, gap: int = 16) -> list[tuple[int, int]]:

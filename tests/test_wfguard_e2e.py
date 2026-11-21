@@ -5,6 +5,7 @@ port from cmf-watch-utils runs/bootloop-repro/), imported over local273.wfc, the
 target/app-wp2.bin from scripts/build-fw (stub version 9)."""
 import asyncio
 import os
+import shutil
 import struct
 import subprocess
 import unittest
@@ -107,6 +108,72 @@ class WatchFaceGuardTest(unittest.TestCase):
             self.assertEqual(face_list(port), (0, [274, 275, 276, 277, 280]))
             self.shot(emu, "2-after-reboot")
             print("wfguard run:", emu.run, "boots", len(boots(uart)), "faults", uart.count("ZEPHYR FATAL ERROR"))
+
+
+WP3_STUB = paths.ROOT / "target/wp3-stub.bin"
+WP3_APP = paths.ROOT / "target/app-wp3.bin"
+
+
+def wp3_preview(run: Path) -> tuple[Path, Path]:
+    """app-wp3.bin and the compatibility ROM with cmf-watch-utils' watch face preview (skips the setup screens)."""
+    app, rom = run / "app-preview.bin", run / "compat-preview.bin"
+    subprocess.run(["uv", "run", "--locked", "python", "-c",
+                    "import sys; from cmf_watch_utils.emu.preview import watch_face_preview as p; "
+                    "rom = bytearray(open('runtime/p10/compat.bin', 'rb').read()); "
+                    "open(sys.argv[2], 'wb').write(p(open(sys.argv[1], 'rb').read(), rom)); "
+                    "open(sys.argv[3], 'wb').write(rom)", str(WP3_APP), str(app), str(rom)],
+                   cwd=paths.cmf_watch_utils(), check=True)
+    return app, rom
+
+
+@skipUnless(harness.E2E and WP3_APP.is_file() and shutil.which("gdb"),
+            "set WP2_E2E=1, gdb on PATH and build target/app-wp3.bin (scripts/build-fw)")
+class Wp3WatchFaceGuardTest(unittest.TestCase):
+    """Watch 3 Pro (fw/wp3-stub): no face is known to fault 1.0.1.77 (the DataPulse port renders), so the debugger
+    models one: built-in 276 made active, a fault once WFManager_Init picked it (tests/e2e/wp3_badface.gdb)."""
+
+    def test_bad_face_falls_back_once(self):
+        cmf = paths.cmf_watch_utils()
+        run = harness.RUNS / f"wfguard-wp3-{harness.time.strftime('%H%M%S')}"
+        run.mkdir(parents=True)
+        app, rom = wp3_preview(run)
+        stub = WP3_STUB.read_bytes()
+        udf, flag = (0x102BD280 + stub.index(pattern) for pattern in (b"\x00\xde", b"/NAND:/wp2wfgrd\0"))
+        port = harness.free_port()
+        out = run / "emu"
+        emu = subprocess.Popen(["uv", "run", "--locked", "cmf-watch-utils", "emu", "run", "--profile", "wp3-stock",
+                                "--headless", "--allow-reboot", "--app", str(app), "--rom", str(rom),
+                                "--gdb-port", str(port), "--fixtures", str(cmf / "fixtures/wp3"),
+                                "--qemu", str(cmf / "runtime/p10/qemu-system-arm"), "--seconds", "100",
+                                "--audio", "none", "--output", str(out)], cwd=cmf)
+        try:
+            end = harness.time.monotonic() + 30
+            while True:
+                try:
+                    harness.socket.create_connection(("127.0.0.1", port)).close()
+                    break
+                except OSError:
+                    self.assertLess(harness.time.monotonic(), end, "no gdb port")
+                    harness.time.sleep(0.05)
+            gdb = subprocess.run(["gdb", "-batch", "-ex", "set architecture armv7e-m", "-ex", "set pagination off",
+                                  "-ex", f"target remote :{port}", "-ex", f"set $udf = {udf:#x}",
+                                  "-ex", f"set $flag = {flag:#x}", "-x", str(paths.ROOT / "tests/e2e/wp3_badface.gdb")],
+                                 capture_output=True, text=True, timeout=600).stdout
+        finally:
+            emu.wait(timeout=600)
+        (run / "gdb.log").write_text(gdb)
+        uart = (out / "uart0.log").read_text(errors="replace")
+        # boot 1 always reboots out of the setup state; boot 2 builds the list with 276 active and faults;
+        # boot 3 falls back to 274 and confirms; the reset makes boot 4, which loads 274 from NOR with no fallback
+        events = [line for line in gdb.splitlines() if line.startswith(("BADFACE", "INIT", "CONFIRM"))]
+        self.assertEqual(events, ["BADFACE fault id=276", "INIT id=274", "CONFIRM unlink", "CONFIRMED reset",
+                                  "INIT id=274"])
+        self.assertEqual((len(boots(uart)), uart.count("ZEPHYR FATAL ERROR")), (4, 1))
+        third, fourth = boots(uart)[2:]
+        self.assertRegex(third, r"cfgOk:1, count:7.*\n(.*\n){0,3}.*WfmPara_Save enter.*\n.*\n.*data_storage_write type:1 ")
+        self.assertRegex(fourth, r"cfgOk:1, count:7")
+        self.assertNotRegex(fourth, r"cfgOk:1, count:7.*\n(.*\n){0,3}.*WfmPara_Save")
+        print("wfguard wp3 run:", run, "boots", len(boots(uart)), "faults", uart.count("ZEPHYR FATAL ERROR"))
 
 
 if __name__ == "__main__":

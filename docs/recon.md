@@ -755,7 +755,8 @@ handler's own storage flush (`0x100C6234`) hits, so the first fault is masked.
 | WfmPara | 0x80 B: magic `0x3DAFB58D`, u8 count +4, u8 active index +5, u8 att +6, u8 kind +7 (0 built-in, 1 photo, 2 download), u32 active id +8, 16-B entries from +0xC (u32 id, u8 att from the wfc header +0x17), checksum +0x7C. `WfmPara_Load` copies it from the RAM mirror `0x3800BC9D`, `WfmPara_Save` (`0x100DEBC4`) back (asserts on count 0) | high (static + emulator) |
 | Persistence | the mirror is inside data_storage type 1 (`0x3800ACD0`, 0x12F8 B, NOR ring at 0x488000, table `0x101F2C78`). `0x101B5A6E(type, -1)` writes a record. Type 1 is written only by `0x100C6234` (power-off `0x10148C60`, menu reboot `0x10148CF4`, `0x101CE678`, the fatal handler) and the factory reset. `AT REBOOT` and a watchdog reset go straight to `0x100EEFF4` and lose a list change: in the emulator a `0x9055` unlist was gone after `AT REBOOT` | high (static + emulator) |
 
-The stub replaces `bl WfmPara_Load` at `0x100DE068` (stub header version 2, field 9, `fw/wp2-stub/src/wfguard.rs`):
+The stub replaces `bl WfmPara_Load` at `0x100DE068` (stub header version 2, field 9, `fw/wp2-stub/src/wfguard.rs`;
+the hook itself is `para_load` in wp2-core `wfguard.rs`, shared with the Watch 3 Pro stub below):
 
 - no flag file `/NAND:/wp2wfgrd`: create it (empty);
 - the flag is there (the last boot never confirmed its face) and the list loaded: `fall_back` (wp2-core `wfguard.rs`)
@@ -783,3 +784,38 @@ e2e keeps it awake; if LVGL timers stop while dark, the flag only goes at the ne
 falls back once without need); a face that faults later than 20 s after the load (first minute tick, a later
 redraw); a bad face made active at run time (`0x9055` set, an upload) faults once there and once more at the next
 boot before the guard takes over; a download (only a replaced built-in was tested); hardware.
+
+### Watch 3 Pro (jx402_08 1.0.1.77)
+
+Re-derived from the stock app.bin (sha256 `815a21fc…`, as cmf-watch-utils `wp3-stock`) by matching the WP2 functions
+and their log strings; the code is the same shape with other addresses. `fw/wp3-stub` (744 B, header
+`WP3S`, version 1, one hook) holds only the guard, appended at the end of app.bin (`0x102BD280`); `wp2apps firmware
+--model wp3 --stub target/wp3-stub.bin` patches the call and fixes ACTH. Addresses are in wp2-core `wfguard.rs` (`WP3`).
+
+| Item | WP2 1.0.0.73 | Watch 3 Pro 1.0.1.77 |
+|---|---|---|
+| `WFManager_Init`, its `bl WfmPara_Load` | `0x100DE020`, `0x100DE068` | `0x100D6DAC`, `0x100D6DF4` |
+| `WfmPara_Load` / `WfmPara_Save` / face att | `0x100DEB34` / `0x100DEBC4` / `0x100DC6B0` | `0x100D7990` / `0x100D7A24` / `0x100D4C70` |
+| WfmPara | 0x80 B at `0x3801AE50`, 7 entries | 0xF0 B at `0x38026CAC` (checksum +0xEC), 14 entries; mirror `0x3800F73A` |
+| data_storage type 1 | `0x3800ACD0`, 0x12F8 B; write `0x101B5A6E` | `0x3800E1A0`, 0x2430 B; write `0x101D0ECC` (same veneer to `0x100B6B40`) |
+| built-ins | `0x101F3D54`: 273–277, 280 | `0x10220810`: 274, 276, 275, 821–824 (ids −1…−3: photo and other kinds) |
+| `lv_timer_create` / `_del` | `0x1013B10C` / `0x1013B1A4` | `0x10148E6C` / `0x10148F04` |
+| `fs_open` / `fs_close` / `fs_unlink` | `0x10107030` / `0x101071E0` / `0x1010764C` | `0x10115F18` / `0x101160C8` / `0x10116638` |
+
+Unlike WP2, the 1.0.1.77 fatal handler's type-1 flush works (the list survives the fault, `cfgOk:1` at the next
+boot). The DataPulse port does not fault 1.0.1.77 (it renders as 274), and no other faulting face is known, so the
+e2e (`tests/test_wfguard_e2e.py`, `Wp3WatchFaceGuardTest`) models one with gdb (`tests/e2e/wp3_badface.gdb`): 276
+made active in the default list, a fault once `WFManager_Init` picked it. 276 rather than 274 because this emulator's
+ROM lacks a call 276 draws with (`unsupported API 0x524f4d`, from `0x1014F822`), so 274 has to be the fallback.
+The runs use cmf-watch-utils' `watch_face_preview` on the patched app (skips the setup screens; boot 1 always
+reboots out of setup).
+
+| Run | Boots | Faults | Result |
+|---|---|---|---|
+| stock app.bin + the model (`runs/wp3/stock-1/`, 60 s) | 6 | 5 | loop |
+| `wp3-stub` (`runs/wp3/guard-3/`, 90 s) | 3 | 1 | boot 3 makes 274 active, stable to the end |
+| e2e `runs/e2e/wfguard-wp3-224800/` | 4 | 1 | boot 3 on 274, flag unlinked by the timer, QEMU reset, boot 4 loads 274 from NOR with no fallback; stable |
+
+Not covered beyond the WP2 list: a face that really faults 1.0.1.77; boots with a reset during the confirm timer
+under gdb (a breakpoint left on the timer path made the virtual watchdog fire once, `runs/wp3/guard-6/`);
+the 3 Pro emulator profile is experimental (synthetic storage layout).

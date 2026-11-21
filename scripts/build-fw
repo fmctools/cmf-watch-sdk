@@ -2,7 +2,7 @@
 set -euo pipefail
 root=$(cd "$(dirname "$0")/.." && pwd)
 out=$root/fw/target/thumbv7em-none-eabi/release
-packages=(-p wp2-stub)
+packages=(-p wp2-stub -p wp3-stub)
 loader=0
 if [ -f "$root/fw/wp2-loader/Cargo.toml" ]; then
     packages+=(-p wp2-loader)
@@ -12,6 +12,7 @@ fi
 mkdir -p "$root/target"
 cd "$root"
 llvm-objcopy -O binary "$out/wp2-stub" target/wp2-stub.bin
+llvm-objcopy -O binary "$out/wp3-stub" target/wp3-stub.bin
 if [ "$loader" = 1 ]; then
     llvm-objcopy -O binary --set-section-flags .data=alloc,load,contents "$out/wp2-loader" target/loader.bin
     rm -f target/loader.wp2app
@@ -20,4 +21,7 @@ if [ "$loader" = 1 ]; then
 fi
 rm -f target/app-wp2.bin
 uv run --locked wp2apps firmware --stub target/wp2-stub.bin --output target/app-wp2.bin
+rm -f target/app-wp3.bin
+uv run --locked wp2apps firmware --model wp3 --stub target/wp3-stub.bin --output target/app-wp3.bin
 echo "$root/target/app-wp2.bin"
+echo "$root/target/app-wp3.bin"
