@@ -17,6 +17,8 @@ NOR_APP_OFFSET = 0x24000
 NOR_APP_SIZE = 0x34B000
 STUB_MAX = 0x6000  # own budget, the NOR app partition has ~964 KiB after app.bin (docs/recon.md)
 STUB_HEADER = struct.Struct("<4sIIIIIII")
+# header version 2 adds the watch face guard hook (fw/wp2-stub/src/wfguard.rs)
+STUB_HEADER_V2 = struct.Struct("<4sIIIIIIII")
 VIEW_TABLE, VIEW_TABLE_END = 0x100004B8, 0x100013E8
 # 0x101461AC and 0x10055458 hold the same values but bound neighbouring tables (docs/recon.md)
 VIEW_START_LITERALS = (0x1018BC24, 0x1018DF3C)
@@ -28,6 +30,9 @@ PAGE_VIEWS = range(0xF8, 0x108)
 BOOT_CALL = 0x101884FA
 STOCK_HEAP_INIT = 0x10146AA4
 BLE_CALL = 0x100D34F0
+# WFManager_Init calls WfmPara_Load here, once per boot before the active face loads (docs/recon.md)
+WFM_PARA_CALL = 0x100DE068
+STOCK_WFM_PARA_LOAD = 0x100DEB34
 STOCK_BLE_READ = 0x100CC284
 # list style descriptor +0xC: its layout; waterfall (0x101EB184) is not covered
 APPLIST_LAYOUT = 0x101EB160
@@ -224,10 +229,13 @@ def patch(app: bytes, stub: bytes | None = None, *, motor: int | None = None, re
 
 
 def add_stub(out: bytearray, stub: bytes) -> None:
-    magic, version, boot, ble, view_proc, view_name, applist, widget = STUB_HEADER.unpack_from(stub)
+    version = struct.unpack_from("<I", stub, 4)[0]
+    header = STUB_HEADER_V2 if version == 2 else STUB_HEADER
+    magic, version, boot, ble, view_proc, view_name, applist, widget, *rest = header.unpack_from(stub)
+    wf_para = rest[0] if rest else 0
     base = APP_VBASE + STUB_OFFSET
-    code = (boot, view_proc) + tuple(p for p in (ble, applist) if p)
-    if (magic != b"WP2S" or version != 1 or not all(p & 1 for p in code)
+    code = (boot, view_proc) + tuple(p for p in (ble, applist, wf_para) if p)
+    if (magic != b"WP2S" or version not in (1, 2) or not all(p & 1 for p in code)
             or not all(base <= p & ~1 < base + len(stub) for p in (*code, view_name))):
         raise ValueError("bad stub header")
     if widget:
@@ -258,6 +266,8 @@ def add_stub(out: bytearray, stub: bytes) -> None:
         put(out, APPLIST_LAYOUT, struct.pack("<I", STOCK_APPLIST_LAYOUT), struct.pack("<I", applist))
     if widget:
         put(out, WGT_REG + 4 * WGT_ID, bytes(4), struct.pack("<I", widget))
+    if wf_para:
+        put(out, WFM_PARA_CALL, thumb_bl(WFM_PARA_CALL, STOCK_WFM_PARA_LOAD), thumb_bl(WFM_PARA_CALL, wf_para & ~1))
 
 
 def changed_ranges(old: bytes, new: bytes, gap: int = 16) -> list[tuple[int, int]]:

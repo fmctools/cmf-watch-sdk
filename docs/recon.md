@@ -740,3 +740,46 @@ Other paths:
 
 Not yet tried on hardware: unlist (delete); a set while the watch is in face edit mode (`WFM in EditMode` suggests the
 handler waits for it); dropping the active face (the code takes the entry at `idx`, so pick another `idx`).
+
+## Watch face boot guard (stub 9)
+
+A face that faults the stock while it loads at boot made the watch loop: fault, panic, reboot, the same face again
+(the DataPulse port of cmf-watch-utils `runs/bootloop-repro/`: 6 boots and 5 faults in 60 s, HARD FAULT on
+ui_service ~0.15 s after `WFManager_Parser enter`; sometimes a hung parser and the 11 s watchdog instead). The
+logged pc `0x100EEB46` is not the cause: it is the assert in `0x10199CC8` (a k_mutex taken in an ISR) that the fatal
+handler's own storage flush (`0x100C6234`) hits, so the first fault is masked.
+
+| Item | Finding | Confidence |
+|---|---|---|
+| Boot path | `WFManager_Init` (`0x100DE020`, once; callers `0x100676FE`, `0x1006E3CC`, `0x100B1924`, `0x100B2352`, all UI views on ui_service) → `WfmPara_Load(0x3801AE50)` (`0x100DEB34`, its only call `0x100DE068`) → `WfmCheck_CheckFast` per id (`0x101B92E2`) → active entry → `WFManager_Load_ByIdx(-1)` → `WFManager_Parser` | high (static + UART) |
+| WfmPara | 0x80 B: magic `0x3DAFB58D`, u8 count +4, u8 active index +5, u8 att +6, u8 kind +7 (0 built-in, 1 photo, 2 download), u32 active id +8, 16-B entries from +0xC (u32 id, u8 att from the wfc header +0x17), checksum +0x7C. `WfmPara_Load` copies it from the RAM mirror `0x3800BC9D`, `WfmPara_Save` (`0x100DEBC4`) back (asserts on count 0) | high (static + emulator) |
+| Persistence | the mirror is inside data_storage type 1 (`0x3800ACD0`, 0x12F8 B, NOR ring at 0x488000, table `0x101F2C78`). `0x101B5A6E(type, -1)` writes a record. Type 1 is written only by `0x100C6234` (power-off `0x10148C60`, menu reboot `0x10148CF4`, `0x101CE678`, the fatal handler) and the factory reset. `AT REBOOT` and a watchdog reset go straight to `0x100EEFF4` and lose a list change: in the emulator a `0x9055` unlist was gone after `AT REBOOT` | high (static + emulator) |
+
+The stub replaces `bl WfmPara_Load` at `0x100DE068` (stub header version 2, field 9, `fw/wp2-stub/src/wfguard.rs`):
+
+- no flag file `/NAND:/wp2wfgrd`: create it (empty);
+- the flag is there (the last boot never confirmed its face) and the list loaded: `fall_back` (wp2-core `wfguard.rs`)
+  makes the first listed built-in other than the active face active; with no other built-in listed the active
+  entry becomes `0x111` (`0x112` if it was `0x111`). Then `WfmPara_Save` and `0x101B5A6E(1, -1)`, so the change
+  survives any reset;
+- either way an `lv_timer` (ui_service) unlinks the flag 20 s later.
+
+Cost: one file create and one unlink per boot, one NOR record (type 1) only when it falls back. A good face loads as
+before. The bad face stays listed and on NAND: the phone deletes it (`wf-delete`) or unlists it (`0x9055`).
+
+Emulator (preview.10 QEMU, `tests/test_wfguard_e2e.py`, DataPulse over `local273.wfc`, the default face):
+
+| Run | Boots | Faults | Result |
+|---|---|---|---|
+| stock app.bin, `--watch-face` (cmf-watch-utils `runs/bg-base/`, 30 s) | 4 | 3 | loop |
+| stub 9, same NAND (cmf-watch-utils `runs/bg-guard-1/`, 60 s) | 2 | 1 | boot 2 makes 274 active, stable |
+| e2e `runs/e2e/wfguard-154319/` | 3 | 1 | boot 2 on 274, flag gone after 20 s; `0x9055` unlists 273; type-1 flush + `AT REBOOT`; boot 3 on 274 with 5 faces, no fallback; frames `1-fallback.png`, `2-after-reboot.png` |
+
+An earlier e2e run without the type-1 write (`runs/e2e/wfguard-153350/`) showed why it is needed: after `AT REBOOT`
+the list was back at 273, the flag was already cleared, and the watch faulted again.
+
+Not covered: the confirm timer with the screen off (this QEMU stops at S3BT ~15 s after the screen goes dark, so the
+e2e keeps it awake; if LVGL timers stop while dark, the flag only goes at the next wake, and a reset before that
+falls back once without need); a face that faults later than 20 s after the load (first minute tick, a later
+redraw); a bad face made active at run time (`0x9055` set, an upload) faults once there and once more at the next
+boot before the guard takes over; a download (only a replaced built-in was tested); hardware.

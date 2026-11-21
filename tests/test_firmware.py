@@ -16,9 +16,11 @@ HAVE_STOCK = STOCK is not None
 
 
 def fake_stub(boot=0x1025A0A1, ble=0x1025A0C1, view_proc=0x1025A0E1, view_name=0x1025A100, applist=0, widget=0,
-              entry=None):
-    """entry: a widget registry entry placed at WIDGET_AT."""
-    stub = bytearray(b"WP2S" + struct.pack("<IIIIIII", 1, boot, ble, view_proc, view_name, applist, widget) + bytes(0x100))
+              entry=None, wf_para=None):
+    """entry: a widget registry entry placed at WIDGET_AT; wf_para: a header version 2 with that hook."""
+    fields = (boot, ble, view_proc, view_name, applist, widget) + (() if wf_para is None else (wf_para,))
+    head = struct.pack(f"<I{len(fields)}I", 1 if wf_para is None else 2, *fields)
+    stub = bytearray(b"WP2S" + head + bytes(0x100))
     if entry is not None:
         at = WIDGET_AT - 0x1025A080
         stub[at:at + len(entry)] = entry
@@ -41,7 +43,8 @@ def synthetic_app():
         for lit in lits:
             struct.pack_into("<I", app, lit - 0x10000000, value)
     struct.pack_into("<I", app, firmware.APPLIST_LAYOUT - 0x10000000, firmware.STOCK_APPLIST_LAYOUT)
-    for at, target in ((firmware.BOOT_CALL, firmware.STOCK_HEAP_INIT), (firmware.BLE_CALL, firmware.STOCK_BLE_READ)):
+    for at, target in ((firmware.BOOT_CALL, firmware.STOCK_HEAP_INIT), (firmware.BLE_CALL, firmware.STOCK_BLE_READ),
+                       (firmware.WFM_PARA_CALL, firmware.STOCK_WFM_PARA_LOAD)):
         app[at - 0x10000000:at - 0x10000000 + 4] = firmware.thumb_bl(at, target)
     return app
 
@@ -283,6 +286,22 @@ class FirmwareTest(unittest.TestCase):
                     dict(applist=0x1025A081 + 0x4000)):
             with self.subTest(**bad), self.assertRaisesRegex(ValueError, "stub"):
                 firmware.patch(STOCK, fake_stub(**bad))
+
+    def test_wf_guard_call_patched(self):
+        at = firmware.WFM_PARA_CALL - 0x10000000
+        out = synthetic_app()
+        firmware.add_stub(out, fake_stub(wf_para=0x1025A0C1))
+        self.assertEqual(out[at:at + 4], firmware.thumb_bl(firmware.WFM_PARA_CALL, 0x1025A0C0))
+        v1 = synthetic_app()
+        firmware.add_stub(v1, fake_stub())
+        self.assertEqual(v1[at:at + 4], firmware.thumb_bl(firmware.WFM_PARA_CALL, firmware.STOCK_WFM_PARA_LOAD))
+        with self.assertRaisesRegex(ValueError, "stub"):
+            firmware.add_stub(synthetic_app(), fake_stub(wf_para=0x1025A0C0))
+
+    @skipUnless(HAVE_STOCK, "needs JX402_V1.0.0.73.bin")
+    def test_wf_guard_call_is_stock(self):
+        at = firmware.WFM_PARA_CALL - 0x10000000
+        self.assertEqual(STOCK[at:at + 4], firmware.thumb_bl(firmware.WFM_PARA_CALL, firmware.STOCK_WFM_PARA_LOAD))
 
     def test_widget_slot_patched(self):
         slot = firmware.WGT_REG + 4 * firmware.WGT_ID - 0x10000000
