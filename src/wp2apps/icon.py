@@ -61,6 +61,12 @@ def read_png(data: bytes) -> tuple[int, int, bytes]:
 def encode(w: int, h: int, rgba: bytes) -> bytes:
     if (w, h) != (SIDE, SIDE):
         raise ValueError(f"icon must be {SIDE}x{SIDE}, got {w}x{h}")
+    px = pixels(w, h, rgba)
+    return DESC.pack(MAGIC, VERSION, CF_TRUE_COLOR_ALPHA, w, h, 0, len(px)) + px
+
+
+def pixels(w: int, h: int, rgba: bytes) -> bytes:
+    """RGBA -> CF 5 pixels (RGB565 LE + A8), straight alpha, 4x4 ordered dither."""
     px = bytearray()
     for y in range(h):
         for x in range(w):
@@ -69,7 +75,7 @@ def encode(w: int, h: int, rgba: bytes) -> bytes:
             c = (min(31, int(r * 31 / 255 + t)) << 11 | min(63, int(g * 63 / 255 + t)) << 5
                  | min(31, int(b * 31 / 255 + t))) if a else 0
             px += struct.pack("<HB", c, a)
-    return DESC.pack(MAGIC, VERSION, CF_TRUE_COLOR_ALPHA, w, h, 0, len(px)) + px
+    return bytes(px)
 
 
 def parse(image: bytes) -> tuple[int, int, bytes] | None:

@@ -19,8 +19,11 @@ def cmd_pack(args):
     elf = args.elf.read_bytes()
     entry = package.check_elf(image, elf)
     kind = package.KIND_LOADER if args.kind == "loader" else package.KIND_APP
+    icons = package.widget_icons_dir(args.widget_icons) if args.widget_icons else ()
+    if args.widget_icons and not icons:
+        raise ValueError(f"no PNG in {args.widget_icons}")
     data = package.pack(image, name=args.name, version=args.version, kind=kind, entry=entry,
-                        relocs=package.relocations(elf), abi_minor=package.abi_minor(image, elf))
+                        relocs=package.relocations(elf), abi_minor=package.abi_minor(image, elf), widget_icons=icons)
     with args.output.open("xb") as out:
         out.write(data)
 
@@ -32,6 +35,7 @@ def cmd_info(args):
         "relocs": len(pkg.relocs), "entry": pkg.entry,
         "image_size": len(pkg.image), "crc32": f"{zlib.crc32(pkg.image):#010x}",
         "icon": icon.parse(pkg.image) is not None, "features": package.features(pkg.image),
+        "widget_icons": len(pkg.widget_icons),
     }, indent=2))
 
 
@@ -180,6 +184,25 @@ def cmd_push(args):
     print(json.dumps({"pushed": slot_name(args.slot), "kind": ("widget", "blob")[kind], "bytes": len(data)}))
 
 
+def column_arg(text: str):
+    """caption:icon:value, split from the right (a caption may be 23:00), icon an index or empty for none"""
+    parts = text.rsplit(":", 2)
+    if len(parts) != 3 or not (parts[1] == "" or parts[1].isdigit()):
+        raise argparse.ArgumentTypeError(f"{text!r} is not caption:icon:value")
+    return parts[0], int(parts[1]) if parts[1] else None, parts[2]
+
+
+def cmd_widget(args):
+    data = install.columns_record(args.columns)
+
+    async def run(s):
+        if (await install.stub(s)).version < install.STUB_V2:
+            raise ValueError(f"columns cards need stub {install.STUB_V2}")
+        await install.push(s, args.slot, install.PUSH_WIDGET, data)
+    asyncio.run(with_watch(args, run))
+    print(json.dumps({"pushed": slot_name(args.slot), "template": "columns", "bytes": len(data)}))
+
+
 def cmd_remove(args):
     asyncio.run(with_watch(args, lambda s: install.remove(s, args.slot)))
     print(json.dumps({"removed": slot_name(args.slot)}))
@@ -302,6 +325,8 @@ def parser():
     pack.add_argument("--output", type=Path, required=True)
     pack.add_argument("--elf", type=Path, required=True, help="Linked ELF: entry/length check and relocation table")
     pack.add_argument("--kind", choices=("app", "loader"), default="app")
+    pack.add_argument("--widget-icons", type=Path, metavar="DIR",
+                      help="40x40 RGBA PNGs, file name order = icon index (docs/app-icons.md)")
     pack.set_defaults(handler=cmd_pack)
     info = commands.add_parser("info", help="Validate a package and print its header")
     info.add_argument("package", type=Path)
@@ -401,6 +426,16 @@ def parser():
         where.add_argument("--hci-port", type=int, help="netsimd H4 TCP port (emulator)")
         where.add_argument("--address", help="BLE address (CoreBluetooth UUID on macOS) of a real watch")
         sub.set_defaults(handler=cmd_cards)
+    widget = commands.add_parser("widget", help="An app's widget card (stub 9 templates, docs/widget-push.md)")
+    actions = widget.add_subparsers(dest="action", required=True)
+    sub = actions.add_parser("set", help="PUSH a columns card while the app does not run")
+    sub.add_argument("slot", type=app_slot_arg)
+    sub.add_argument("--columns", type=column_arg, nargs="+", required=True, metavar="CAPTION:ICON:VALUE",
+                     help="1..4 columns, e.g. 'Now:0:-3°' '23:00:1:-4°'; an empty ICON shows none")
+    where = sub.add_mutually_exclusive_group(required=True)
+    where.add_argument("--hci-port", type=int, help="netsimd H4 TCP port (emulator)")
+    where.add_argument("--address", help="BLE address (CoreBluetooth UUID on macOS) of a real watch")
+    sub.set_defaults(handler=cmd_widget)
     scan = commands.add_parser("scan", help="List nearby CMF watches (read-only; address redacted by default)")
     scan.add_argument("--timeout", type=float, default=5.0)
     scan.add_argument("--show-address", action="store_true")

@@ -5,6 +5,7 @@ import struct
 from pathlib import Path
 import tempfile
 import unittest
+import zlib
 
 from wp2apps import cli, package
 
@@ -15,6 +16,32 @@ class PackageTest(unittest.TestCase):
         pkg = package.parse(package.pack(image, name="Vibration Lab", version=3, relocs=[0, 8]))
         self.assertEqual((pkg.name, pkg.version, pkg.kind, pkg.abi, pkg.entry, pkg.image, pkg.relocs),
                          ("Vibration Lab", 3, package.KIND_APP, 1, 0, image, (0, 8)))
+
+    def test_widget_icon_trailer(self):
+        image, icons = bytes(64), [bytes([i]) * package.WIDGET_ICON_BYTES for i in range(3)]
+        plain = package.pack(image, name="w", version=1, relocs=[4])
+        data = package.pack(image, name="w", version=1, relocs=[4], widget_icons=icons)
+        self.assertEqual(data[:len(plain)], plain, "body_crc and header do not cover the trailer")
+        self.assertEqual(data[len(plain):len(plain) + 8], b"WP2W\x01\x03\x28\x00")
+        self.assertEqual(struct.unpack_from("<I", data, len(plain) + 8)[0], zlib.crc32(b"".join(icons)))
+        self.assertEqual(len(data), len(plain) + 12 + 3 * 4800)
+        self.assertEqual(package.parse(data).widget_icons, tuple(icons))
+        self.assertEqual(package.parse(plain).widget_icons, ())
+        self.assertEqual(package.strip_trailer(data), plain)
+        at = len(plain)
+        for off, value in ((0, 0x58), (4, 2), (5, 0), (5, 2), (6, 48), (7, 1), (8, data[at + 8] ^ 1), (12, 9)):
+            bad = bytearray(data)
+            bad[at + off] = value  # magic, version, count, size, zero, crc, a pixel
+            with self.assertRaises(ValueError, msg=f"byte {off}"):
+                package.parse(bytes(bad))
+        with self.assertRaises(ValueError):
+            package.parse(data[:-1])
+        with self.assertRaises(ValueError):
+            package.pack(image, name="w", version=1, widget_icons=[bytes(4800)] * 17)
+        with self.assertRaises(ValueError):
+            package.pack(image, name="w", version=1, widget_icons=[bytes(4799)])
+        with self.assertRaises(ValueError):
+            package.pack(image, name="l", version=1, kind=package.KIND_LOADER, widget_icons=[bytes(4800)])
 
     def test_set_order(self):
         image = b"\x01" * 8 + package.ORDER_MAGIC + bytes(24 * package.ORDER_MAX) + b"\x02" * 8

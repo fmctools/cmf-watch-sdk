@@ -100,7 +100,41 @@ class InstallFlowTest(unittest.IsolatedAsyncioTestCase):
         self.assertTrue((await install.info(s, 2)).icon)
 
 
+class TrailerInstallTest(unittest.IsolatedAsyncioTestCase):
+    async def test_trailer_stripped_before_stub_9(self):
+        data = package.pack(bytes(64), name="w", version=1, widget_icons=[bytes(package.WIDGET_ICON_BYTES)])
+        for stub, size in ((8, len(package.strip_trailer(data))), (9, len(data))):
+            s = FakeSession(stub=stub)
+            await install.install(s, data)
+            begin = [p for c, p in s.calls if c == install.BEGIN][0]
+            self.assertEqual(struct.unpack("<BII", begin)[1], size, f"stub {stub}")
+
+
+# Golden v2 record, also in sdk/cmf-wp2-app (columns_record_golden): other repos build test vectors with
+# install.columns_record.
+COLUMNS = bytes.fromhex("ff01034e6f7700000000000000002d33c2b000000000000032333a303000000000000134c2b00000000000000030"
+                        "303a30300000000000ff2d2d0000000000000000")
+
+
 class PushTest(unittest.IsolatedAsyncioTestCase):
+    def test_columns_record(self):
+        self.assertEqual(install.columns_record([("Now", 0, "-3°"), ("23:00", 1, "4°"), ("00:00", None, "--")]),
+                         COLUMNS)
+        self.assertEqual(len(install.columns_record([("a", None, "b")] * 4)), 87)
+        cut = install.columns_record([("ééééé", 15, "x" * 20)])
+        self.assertEqual(cut[3:13], "éééé".encode() + bytes(2), "cut at a char boundary, NUL kept")
+        self.assertEqual(cut[14:24], b"x" * 9 + b"\0")
+        for bad in ([], [("a", None, "b")] * 5, [("a", 16, "b")]):
+            with self.assertRaises(ValueError):
+                install.columns_record(bad)
+
+    def test_column_arg(self):
+        from wp2apps import cli
+        self.assertEqual(cli.column_arg("23:00:1:-4°"), ("23:00", 1, "-4°"))
+        self.assertEqual(cli.column_arg("Now::5"), ("Now", None, "5"))
+        with self.assertRaises(Exception):
+            cli.column_arg("Now:x:5")
+
     def test_widget_record_as_the_sdk(self):
         rec = install.widget_record("Weather", "21°\nSunny")
         self.assertEqual(len(rec), 64)

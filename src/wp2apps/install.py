@@ -109,10 +109,13 @@ async def install(s, data: bytes, slot: int | None = None) -> int:
         raise ValueError("a loader package goes to slot L")
     if pkg.kind != package.KIND_LOADER and slot == LOADER_SLOT:
         raise ValueError("slot L takes only the loader package")
+    st = await stub(s) if pkg.kind == package.KIND_APP else None
+    if pkg.widget_icons and st.version < package.STUB_TRAILER:
+        data = package.strip_trailer(data)  # an older stub refuses the extra bytes; it draws no icons anyway
     if pkg.kind == package.KIND_LOADER:
         slot = LOADER_SLOT
     elif slot is None:
-        count = slots(await stub(s))
+        count = slots(st)
         used = await listing(s, count)
         same = [n for n, h in used.items() if n < count and h.name == pkg.name]
         free = [n for n in range(count) if n not in used]
@@ -139,12 +142,35 @@ async def remove(s, slot: int) -> None:
 def widget_record(title: str, value: str) -> bytes:
     """The 64-byte widget file, as the SDK's widget_record: title (<= 23 bytes) at 0, value (<= 39) at 24, NUL-padded,
     each cut at a UTF-8 character boundary."""
-    def field(text: str, size: int) -> bytes:
-        raw = text.encode("utf-8")[:size - 1]
-        return raw.decode("utf-8", "ignore").encode("utf-8").ljust(size, b"\0")
-    return field(title, 24) + field(value, 40)
+    return _field(title, 24) + _field(value, 40)
+
+
+V2, T_TEXT, T_COLUMNS = 0xFF, 0, 1
+NO_ICON = 0xFF
+STUB_V2 = 9  # the first stub that draws v2 records (wp2_core::widget::first_stub)
+
+
+def columns_record(columns) -> bytes:
+    """A v2 `columns` widget record (stub 9, docs/widget-push.md), the same bytes as the SDK's
+    `Api::widget_columns`: FF 01 n, then per column caption[10] icon:u8 value[10], text UTF-8 cut at a character
+    boundary to 9 bytes and NUL-padded. `columns`: 1..4 (caption, icon index or None, value)."""
+    if not 1 <= len(columns) <= 4:
+        raise ValueError(f"1..4 columns, got {len(columns)}")
+    out = bytes([V2, T_COLUMNS, len(columns)])
+    for caption, icon_index, value in columns:
+        index = NO_ICON if icon_index is None else icon_index
+        if not 0 <= index < 16 and index != NO_ICON:
+            raise ValueError(f"icon index {icon_index} is not 0..15")
+        out += _field(caption, 10) + bytes([index]) + _field(value, 10)
+    return out
+
+
+def _field(text: str, size: int) -> bytes:
+    raw = text.encode("utf-8")[:size - 1]
+    return raw.decode("utf-8", "ignore").encode("utf-8").ljust(size, b"\0")
 
 
 async def push(s, slot: int, kind: int, data: bytes) -> None:
-    """PUSH (stub 8): the app's widget record (64 bytes) or start blob (<= 128 bytes); empty data removes it."""
+    """PUSH (stub 8): the app's widget record (v1 64 bytes; stub 9 also v2, up to 128) or start blob (<= 128 bytes);
+    empty data removes it. Send v2 only to stub 9 or later (`stub`): an older one answers BAD_REQUEST."""
     await _call(s, PUSH, bytes([slot, kind]) + data)

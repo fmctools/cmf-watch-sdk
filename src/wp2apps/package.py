@@ -1,5 +1,6 @@
 from collections.abc import Sequence
 from dataclasses import dataclass
+from pathlib import Path
 import struct
 import zlib
 
@@ -30,6 +31,59 @@ def features(image: bytes) -> list[str]:
     return [name for bit, name in ((WIDGET, "widget"), (PAGE, "page")) if flags & bit]
 
 
+# Widget icons (docs/app-icons.md, "Widget icons"): a trailer after the relocation table, outside body_crc and the
+# loaded image. "WP2W", version 1, count 1..16, size 40, 0, crc32 of the pixels, count x 40x40 CF 5 pixels.
+TRAILER = struct.Struct("<4sBBBBI")
+TRAILER_MAGIC = b"WP2W"
+WIDGET_ICON_SIDE = 40
+WIDGET_ICON_BYTES = WIDGET_ICON_SIDE * WIDGET_ICON_SIDE * 3
+WIDGET_ICONS_MAX = 16
+STUB_TRAILER = 9  # the first stub that takes a package with a trailer (older ones check the exact size)
+
+
+def widget_trailer(icons: Sequence[bytes]) -> bytes:
+    if not 1 <= len(icons) <= WIDGET_ICONS_MAX:
+        raise ValueError(f"1..{WIDGET_ICONS_MAX} widget icons, got {len(icons)}")
+    if any(len(i) != WIDGET_ICON_BYTES for i in icons):
+        raise ValueError(f"widget icons are {WIDGET_ICON_SIDE}x{WIDGET_ICON_SIDE} CF 5 ({WIDGET_ICON_BYTES} bytes)")
+    px = b"".join(icons)
+    return TRAILER.pack(TRAILER_MAGIC, 1, len(icons), WIDGET_ICON_SIDE, 0, zlib.crc32(px)) + px
+
+
+def parse_trailer(data: bytes) -> tuple[bytes, ...]:
+    """The widget icons of a trailer; ValueError for a broken one."""
+    if len(data) < TRAILER.size:
+        raise ValueError("widget icon trailer is truncated")
+    magic, version, count, side, zero, crc = TRAILER.unpack_from(data)
+    if (magic, version, side, zero) != (TRAILER_MAGIC, 1, WIDGET_ICON_SIDE, 0) or not 1 <= count <= WIDGET_ICONS_MAX:
+        raise ValueError("bad widget icon trailer head")
+    px = data[TRAILER.size:]
+    if len(px) != count * WIDGET_ICON_BYTES:
+        raise ValueError(f"widget icon trailer has {len(px)} pixel bytes for {count} icons")
+    if zlib.crc32(px) != crc:
+        raise ValueError("widget icon trailer CRC mismatch")
+    return tuple(px[i:i + WIDGET_ICON_BYTES] for i in range(0, len(px), WIDGET_ICON_BYTES))
+
+
+def widget_icons_dir(directory: Path) -> list[bytes]:
+    """The 40x40 RGBA PNGs of `directory`, in file name order (scripts/build-app renders widget-icons/NN-name.svg)."""
+    from . import icon
+    icons = []
+    for png in sorted(directory.glob("*.png")):
+        w, h, rgba = icon.read_png(png.read_bytes())
+        if (w, h) != (WIDGET_ICON_SIDE, WIDGET_ICON_SIDE):
+            raise ValueError(f"{png.name} is {w}x{h}; widget icons are {WIDGET_ICON_SIDE}x{WIDGET_ICON_SIDE}")
+        icons.append(icon.pixels(w, h, rgba))
+    return icons
+
+
+def strip_trailer(data: bytes) -> bytes:
+    """The package without its widget icon trailer, for a stub before STUB_TRAILER: the same bytes as a package
+    packed without icons (body_crc never covers the trailer)."""
+    _, _, _, _, _, _, size, _, count, *_ = HEADER.unpack_from(data)
+    return data[:HEADER_SIZE + size + 4 * count]
+
+
 @dataclass(frozen=True)
 class Package:
     kind: int
@@ -40,6 +94,7 @@ class Package:
     entry: int
     image: bytes
     relocs: tuple[int, ...]
+    widget_icons: tuple[bytes, ...] = ()
 
 
 SHN_ABS = 0xFFF1
@@ -67,7 +122,7 @@ def _check(image: bytes, name: bytes, kind: int, entry: int, relocs: Sequence[in
 
 
 def pack(image: bytes, *, name: str, version: int, entry: int = 0, kind: int = KIND_APP,
-         relocs: Sequence[int] = (), abi_minor: int = ABI_MINOR) -> bytes:
+         relocs: Sequence[int] = (), abi_minor: int = ABI_MINOR, widget_icons: Sequence[bytes] = ()) -> bytes:
     encoded = name.encode("utf-8")
     _check(image, encoded, kind, entry, relocs)
     if not 0 <= abi_minor <= 0xFF:
@@ -76,7 +131,9 @@ def pack(image: bytes, *, name: str, version: int, entry: int = 0, kind: int = K
     fields = [MAGIC, ABI, kind, abi_minor, encoded, version, len(image), entry, len(relocs),
               zlib.crc32(image + table), 0, b""]
     fields[10] = zlib.crc32(HEADER.pack(*fields)[:HEADER_CRC_SPAN])
-    return HEADER.pack(*fields) + image + table
+    if widget_icons and kind != KIND_APP:
+        raise ValueError("only an app carries widget icons")
+    return HEADER.pack(*fields) + image + table + (widget_trailer(widget_icons) if widget_icons else b"")
 
 
 def parse(data: bytes) -> Package:
@@ -92,10 +149,12 @@ def parse(data: bytes) -> Package:
         raise ValueError("reserved header bytes are not zero")
     if abi != ABI:
         raise ValueError(f"unsupported ABI {abi}")
-    if len(data) != HEADER_SIZE + size + 4 * count:
+    end = HEADER_SIZE + size + 4 * count
+    if len(data) < end or (len(data) > end and kind != KIND_APP):
         raise ValueError(f"header says {size} image bytes and {count} relocations, "
                          f"package has {len(data) - HEADER_SIZE} bytes")
-    body = data[HEADER_SIZE:]
+    widget_icons = parse_trailer(data[end:]) if len(data) > end else ()
+    body = data[HEADER_SIZE:end]
     if zlib.crc32(body) != crc:
         raise ValueError("image CRC mismatch")
     image = body[:size]
@@ -106,7 +165,7 @@ def parse(data: bytes) -> Package:
     except UnicodeDecodeError as error:
         raise ValueError("name is not valid UTF-8") from error
     _check(image, encoded, kind, entry, relocs)
-    return Package(kind, abi, abi_minor, name, version, entry, image, relocs)
+    return Package(kind, abi, abi_minor, name, version, entry, image, relocs, widget_icons)
 
 
 def _sections(elf: bytes):
