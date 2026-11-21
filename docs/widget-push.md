@@ -18,7 +18,7 @@ Request plaintext: `slot:u8 ‖ kind:u8 ‖ data`
 
 | `kind` | `data` | Stored as |
 |---|---|---|
-| `00` widget | exactly 64 bytes, or empty to remove | `/NAND:/wp2apps/<d>.wgt`, the card's record |
+| `00` widget | a v1 record (exactly 64 bytes), from stub 9 also a well-formed v2 record (up to 128 bytes), or empty to remove | `/NAND:/wp2apps/<d>.wgt`, the card's record |
 | `01` blob | 1..128 bytes, or empty to remove | `/NAND:/wp2apps/<d>.psh` |
 
 `slot` is `0..15` (`<d>` its hex digit, `docs/abi-1.4.md`, "16 app slots"). The slot must hold an app package.
@@ -32,6 +32,30 @@ offset 24: value, UTF-8, at most 39 bytes, then 00 up to offset 64; 0A starts a 
 
 Cut long text at a UTF-8 character boundary. The card shows the title grey, the value white; a line wider than the
 tile ends in `…`. Removing the record shows the package name again.
+
+### v2 records (stub 9)
+
+A record whose first byte is `FF` (never the start of UTF-8) is v2: `FF ‖ template:u8 ‖ fields`, at most 128 bytes,
+the exact length of its template:
+
+| template | fields | length |
+|---|---|---|
+| `00` text | `title[24] ‖ value[40]` as v1 | 66 |
+| `01` columns | `n:u8` (1..4), then `n × { caption[10] ‖ icon:u8 ‖ value[10] }` | 3 + 21·n (24, 45, 66, 87) |
+
+Text fields are UTF-8, at most 9 (caption, value) or 23/39 (text) bytes, then NUL up to the end of the field. `icon`
+indexes the package's widget icons (`docs/app-icons.md`), `FF` = none. `°` (C2 B0) is drawn as the stock `º`.
+
+- `PUSH` refuses a malformed v2 record (`BadRequest`); a v2 record to a stub before 9 is `BadRequest` too (it takes
+  exactly 64 bytes): read the stub version first and push v2 only to 9 or later.
+- The stub draws v2 only when the whole record is valid, including every icon index below the package's icon count;
+  anything else (and a template it does not know) shows the package name. The face never depends on the record.
+- Note: the design said 64..128 B for `PUSH` and op `0x14`; a `columns` record with one or two columns is shorter
+  than 64, so both take any length up to 128 and the record's own checks decide.
+
+Test vectors: `wp2apps.install.columns_record([(caption, icon or None, value), …])` builds the same bytes as the
+SDK's `Api::widget_columns` (golden in `tests/test_install.py` and `sdk/cmf-wp2-app`). From a Mac:
+`wp2apps widget set <slot> --columns 'Now:0:21°' '10:00:1:19°' --hci-port P` (caption:icon:value, empty icon = none).
 
 Reply plaintext:
 

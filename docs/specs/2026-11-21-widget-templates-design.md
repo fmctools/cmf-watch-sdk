@@ -143,6 +143,23 @@ The owner's call: the card must not show hours that have passed, so FMC Companio
   either is right; no arbitration.
 - Only for the Weather package for now, behind the Apps tab's existing weather permission for that app.
 
+## As built (2026-11-21, deviations)
+
+- **Trailer and `body_crc`.** `body_crc` does *not* cover the widget icon trailer: an old loader checks `body_crc`
+  over image + relocations and would refuse the app, and a new one would read every icon at each start. The
+  trailer carries its own crc32: `"WP2W" ‖ 1 ‖ count ‖ 40 ‖ 0 ‖ crc32:u32 ‖ pixels` (12-byte head). Stub 9 checks
+  it at `END`; a bad one has its magic zeroed and the app still installs and runs, without icons. The card checks
+  the head before reading an icon.
+- **Old stubs.** A stub before 9 refuses any package longer than its header says (`Invalid` at `END`); a header flag
+  cannot help (reserved bytes must be 0, the size check stays). So hosts strip the trailer for stub < 9
+  (`package.strip_trailer`, `wp2apps install`; the companion later): the result is byte for byte the package without
+  icons. Old loaders need nothing.
+- **Record length.** `columns` with one or two columns is 24 or 45 bytes, so op `0x14` and `PUSH` kind `00` take any
+  length up to 128 and the record's own checks decide (v1 stays exactly 64).
+- **Look.** Captions and values are both white, as in 97 (the stock code sets both to white; the frame reads it
+  grey). `°` is drawn as `º` (U+00BA): the stock fonts have only that one, and 97 uses it.
+- **Free RES.** Measured with 16 tiles: no shortage, the icons stay 40 px.
+
 ## Left to the builder
 
 - The exact geometry and fonts of 97 (from the frame and the stock code), the icon size (40 or 48), which stock font

@@ -426,6 +426,38 @@ and a white value, on the stock card grey in the system font. The app only store
 api.widget("Vibration Lab", "Strength 35%\nPattern Tick");
 ```
 
+#### Columns card (stub 9)
+
+From stub 9 (and the loader of 2026-11-21) the tile can also be a `columns` card in the layout of the stock
+weather-by-hour widget: one to four columns, each a caption, one of the app's own icons and a value.
+
+| Call | Returns |
+|---|---|
+| `widget_columns(&[Column]) -> i32` | `0`, `-5` I/O error, `-22` when the watch cannot draw it (stub before 9, older loader), for 0 or more than 4 columns or an icon over 15 |
+| `widget_v2(rec: &[u8]) -> i32` | the raw v2 record (`docs/widget-push.md`), same codes |
+
+- `Column { caption, icon: Option<u8>, value }`: caption and value up to 9 bytes each, cut at a char boundary. Write
+  `°` as usual: the stock fonts have only `º` (U+00BA), and the stub draws `°` as that, as the stock widget does.
+- Icons: 40×40 SVGs in `widget-icons/` next to `Cargo.toml` (`00-sun.svg`, `01-cloud.svg`, …); the index is the
+  position in file name order. `scripts/build-app` renders them into the package's widget icon trailer
+  (`docs/app-icons.md`). An index the package does not have makes the whole card fall back to the package name.
+- On `-22`, fall back to `widget(title, value)`:
+
+```rust
+let rc = api.widget_columns(&[
+    Column { caption: "Now", icon: Some(0), value: "21°" },
+    Column { caption: "10:00", icon: Some(1), value: "19°" },
+]);
+if rc == -22 {
+    api.widget("Forecast", "21°");
+}
+```
+
+- Layout (stock widget 97): columns 80 px apart from x 20 (fewer columns share 320 px), caption in `font24L` at
+  y 18, the icon centred, the value in `font24M` at y 116, all white on the tile grey.
+- Example: `widget-columns`; `tests/test_widget_templates_e2e.py`. The phone can push the same card
+  (`wp2apps widget set`, `docs/widget-push.md`).
+
 ### Page (next to the watch face)
 
 An app can also be a whole page of its own next to the watch face, a swipe away from it, instead of the menu.
