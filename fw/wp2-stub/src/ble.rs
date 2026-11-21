@@ -8,7 +8,8 @@ use wp2_core::layout::{
     LOADER_ABI_MINOR, LOADER_SIZE,
     LOADER_SLOT, STUB_VERSION,
 };
-use wp2_core::pkg::{check_slot, crc32, parse_header, HEADER_SIZE};
+use wp2_core::pkg::{check_slot, crc32, file_size, parse_header, HEADER_SIZE, KIND_APP};
+use wp2_core::widget::{trailer_head, trailer_len, TRAILER_HEAD};
 use wp2_core::proto::{parse, push_wait, Request, Status, ANY_SLOT, DELETE, EVENT, INFO, MAX_DATA, PUSH, PUSH_WIDGET};
 use wp2_core::aes;
 use wp2_core::cards::{page_slot, APP_WIDGET, PAGE_VIEW};
@@ -473,40 +474,68 @@ fn name(path: &[u8]) -> [u8; 24] {
     raw[8..].try_into().unwrap()
 }
 
-// Re-reads the closed file: CRC of all of it, header checks, exact size, CRC of image and relocation table.
+// Re-reads the closed file: CRC of all of it, header checks, size, CRC of image and relocation table. Stub 9: bytes
+// after the relocation table are the widget icon trailer (docs/app-icons.md), outside body_crc; a bad one is
+// neutralised (its magic zeroed) and the app still installs, without icons.
 fn verify(ram: &mut StubRam, tmp: &[u8]) -> Status {
     if fs::open(&mut ram.file, tmp, fs::READ) < 0 {
         return Status::Io;
     }
-    let s = scan(ram);
+    let (s, bad_trailer) = scan(ram);
     fs::close(&mut ram.file);
+    if s == Status::Ok && bad_trailer != 0 {
+        if fs::open(&mut ram.file, tmp, fs::READ | fs::WRITE) < 0 {
+            return Status::Io;
+        }
+        let ok = fs::seek(&mut ram.file, bad_trailer) == 0 && fs::write(&mut ram.file, &[0; 4]) == 4;
+        if fs::close(&mut ram.file) < 0 || !ok {
+            return Status::Io;
+        }
+    }
     s
 }
 
-fn scan(ram: &mut StubRam) -> Status {
+// (status, offset of a bad trailer's magic or 0)
+fn scan(ram: &mut StubRam) -> (Status, u32) {
     let mut raw = [0u8; HEADER_SIZE];
     if !fs::read_exact(&mut ram.file, &mut raw) {
-        return Status::Io;
+        return (Status::Io, 0);
     }
-    let (mut all, mut body) = (crc32(0, &raw), 0u32);
-    let mut left = ram.xfer_size as usize - HEADER_SIZE;
-    while left > 0 {
-        let chunk = &mut ram.scratch[..left.min(0x200)];
+    // checked first: file_size of an unchecked header may overflow
+    let h = parse_header(&raw).ok().filter(|h| check_slot(h, ram.xfer_slot).is_ok());
+    // image + relocations; the rest is the trailer
+    let body_len = h.as_ref().map_or(0, |h| file_size(h) as usize - HEADER_SIZE);
+    let (mut all, mut body, mut tcrc) = (crc32(0, &raw), 0u32, 0u32);
+    let mut head = [0u8; TRAILER_HEAD];
+    let mut off = 0;
+    let size = ram.xfer_size as usize - HEADER_SIZE;
+    while off < size {
+        let chunk = &mut ram.scratch[..(size - off).min(0x200)];
         if !fs::read_exact(&mut ram.file, chunk) {
-            return Status::Io;
+            return (Status::Io, 0);
         }
         all = crc32(all, chunk);
-        body = crc32(body, chunk);
-        left -= chunk.len();
+        let b = body_len.saturating_sub(off).min(chunk.len());
+        body = crc32(body, &chunk[..b]);
+        let t = (off + b).saturating_sub(body_len); // trailer offset of chunk[b]
+        let hn = TRAILER_HEAD.saturating_sub(t).min(chunk.len() - b);
+        head[t.min(TRAILER_HEAD)..t.min(TRAILER_HEAD) + hn].copy_from_slice(&chunk[b..b + hn]);
+        tcrc = crc32(tcrc, &chunk[b + hn..]);
+        off += chunk.len();
     }
     if all != ram.xfer_crc {
-        return Status::Crc;
+        return (Status::Crc, 0);
     }
-    let Ok(h) = parse_header(&raw) else { return Status::Invalid };
-    let exact = HEADER_SIZE as u64 + h.image_size as u64 + 4 * h.reloc_count as u64;
-    if check_slot(&h, ram.xfer_slot).is_err() || exact != ram.xfer_size as u64 || body != h.body_crc {
-        return Status::Invalid;
+    let Some(h) = h else { return (Status::Invalid, 0) };
+    if body_len > size || body != h.body_crc {
+        return (Status::Invalid, 0);
     }
-    Status::Ok
+    let rest = size - body_len;
+    let good = rest == 0 || trailer_head(&head).is_some_and(|(n, crc)| rest == trailer_len(n) && crc == tcrc);
+    let bad = if good || rest < 4 || h.kind != KIND_APP { 0 } else { file_size(&h) };
+    if !good && h.kind != KIND_APP {
+        return (Status::Invalid, 0); // the loader carries no icons: its size stays exact
+    }
+    (Status::Ok, bad)
 }
 

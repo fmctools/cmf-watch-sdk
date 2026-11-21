@@ -39,11 +39,9 @@ const OUT_RIGHT_MID: u32 = 0x14;
 
 // Stock icons: LV_IMG_CF_TRUE_COLOR_ALPHA 96x96 (RGB565 LE + alpha), a filled circle with a light glyph.
 pub(crate) const ICON: usize = 96;
-const PIXELS: usize = ICON * ICON * 3;
 // The emulator's GPU model reads 3-byte pixels only behind this header (cmf-watch-utils acts_vg_resource_packed);
 // the firmware programs the GPU the same way for stock icons and ours.
 const HEAD: usize = 64;
-const BLOCK: usize = HEAD + PIXELS + size_of::<ImgDsc>();
 const CIRCLE: u16 = 0x2966;
 const GLYPH: u16 = 0xF79E;
 
@@ -123,22 +121,35 @@ unsafe fn add_row(data: *mut u8) {
     stock!(EVENT_SEND, fn(Obj, u32, *mut u8) -> u32)(cont, SCROLL, core::ptr::null_mut());
 }
 
-/// The Custom Apps icon in a RES block: [64 B header like the stock resource cache's][pixels, 64-byte aligned like
-/// the stock icons][ImgDsc]. Freed with `heap::free(RES, block)`.
+/// The Custom Apps icon in a RES block (`image_block`). Freed with `heap::free(RES, block)`.
 pub(crate) fn icon_block() -> Option<(*mut u8, *const ImgDsc)> {
-    let block = heap::alloc(RES, BLOCK as u32, 0x40);
+    image_block(ICON, |px| {
+        draw_icon(px);
+        true
+    })
+}
+
+/// A `side`² CF 5 image in a RES block: [64 B header like the stock resource cache's][pixels, 64-byte aligned like
+/// the stock icons][ImgDsc]; `fill` writes the pixels, false frees the block. Freed with `heap::free(RES, block)`.
+pub(crate) fn image_block(side: usize, fill: impl FnOnce(&mut [u8]) -> bool) -> Option<(*mut u8, *const ImgDsc)> {
+    let pixels = side * side * 3;
+    let size = HEAD + pixels + size_of::<ImgDsc>();
+    let block = heap::alloc(RES, size as u32, 0x40);
     if block.is_null() {
         return None;
     }
-    let (pixels, dsc) = unsafe { (block.add(HEAD), block.add(HEAD + PIXELS) as *mut ImgDsc) };
+    let (px, dsc) = unsafe { (block.add(HEAD), block.add(HEAD + pixels) as *mut ImgDsc) };
+    if !fill(unsafe { core::slice::from_raw_parts_mut(px, pixels) }) {
+        unsafe { heap::free(RES, block) };
+        return None;
+    }
     unsafe {
         let head = core::slice::from_raw_parts_mut(block as *mut u32, HEAD / 4);
         head.fill(0);
-        (head[2], head[4], head[5], head[6], head[8]) = ((HEAD + PIXELS) as u32, ICON as u32, ICON as u32, 3, pixels as u32);
-        draw_icon(core::slice::from_raw_parts_mut(pixels, PIXELS));
-        dsc.write(ImgDsc { header: 5 | (ICON as u32) << 10 | (ICON as u32) << 21, size: PIXELS as u32, data: pixels });
+        (head[2], head[4], head[5], head[6], head[8]) = ((HEAD + pixels) as u32, side as u32, side as u32, 3, px as u32);
+        dsc.write(ImgDsc { header: 5 | (side as u32) << 10 | (side as u32) << 21, size: pixels as u32, data: px });
     }
-    sync_psram(block, BLOCK as u32);
+    sync_psram(block, size as u32);
     Some((block, dsc))
 }
 

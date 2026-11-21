@@ -8,8 +8,12 @@ use core::ptr::null_mut;
 use wp2_core::fs::{self, File};
 use wp2_core::heap::{self, RES};
 use wp2_core::layout::{slot_path, stub_ram, widget_path, WIDGET_REC, WIDGET_TITLE};
+use wp2_core::pkg::{file_size, parse_header, HEADER_SIZE};
+use wp2_core::widget::{
+    card, icon_at, trailer_head, Card, CAPTION, COLUMN, COLUMNS_AT, ICON_SIDE, NO_ICON, REC_MAX, TRAILER_HEAD,
+};
 
-use crate::applist::{icon_block, ImgDsc, ICON};
+use crate::applist::{icon_block, image_block, ImgDsc, ICON};
 
 /// wgt_reg id; the stock table has NULL there
 pub const ID: u8 = 0x40;
@@ -52,6 +56,9 @@ const GREY: u32 = 0x9CF3;
 const USER_DATA: usize = 0x10;
 const OPEN_VIEW: u32 = 0x101898BD;
 const FONT_PATH: &[u8] = b"/NAND:A/font32M.font\0";
+/// stock widget 97's caption and value fonts; font24M has `°` (97 draws `0°` in it)
+const CAPTION_FONT: &[u8] = b"/NAND:A/font24L.font\0";
+const VALUE_FONT: &[u8] = b"/NAND:A/font24M.font\0";
 const TEXT: &[u8] = b"Apps\0";
 const PAD: i32 = (H - ICON as i32) / 2;
 
@@ -94,14 +101,13 @@ pub struct Ctx {
     id: u16,
 }
 
+/// Per card: up to two fonts and, for `columns`, 4 × (caption, icon, value) objects and 4 icon blocks.
 #[repr(C)]
 pub struct State {
-    font: [u32; 8],
-    font_open: u32,
-    icon: Obj,
-    label: Obj,
-    value: Obj,
-    block: *mut u8,
+    font: [[u32; 8]; 2],
+    font_open: [u32; 2],
+    objs: [Obj; 12],
+    blocks: [*mut u8; 4],
 }
 
 pub static WIDGET: WgtReg = WgtReg {
@@ -125,32 +131,67 @@ fn param(obj: Obj) -> u8 {
     unsafe { *obj.add(USER_DATA) }
 }
 
-fn label(s: &State, parent: Obj, text: *const u8, color: u32, x: i32, y: i32, h: i32) -> Obj {
+fn open_font(s: &mut State, i: usize, path: &[u8]) -> *const u32 {
+    s.font_open[i] = (stock!(FONT_OPEN, fn(*mut u32, *const u8) -> i32)(s.font[i].as_mut_ptr(), path.as_ptr()) == 0) as u32;
+    if s.font_open[i] != 0 { s.font[i].as_ptr() } else { core::ptr::null() }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn label(parent: Obj, font: *const u32, text: *const u8, color: u32, x: i32, y: i32, w: i32, h: i32) -> Obj {
     let label = stock!(LABEL_CREATE, fn(Obj) -> Obj)(parent);
     if label.is_null() {
         return label;
     }
     stock!(OBJ_ADD_FLAG, fn(Obj, u32) -> ())(label, EVENT_BUBBLE);
-    if s.font_open != 0 {
-        style(label, STYLE_TEXT_FONT, s.font.as_ptr() as u32);
+    if !font.is_null() {
+        style(label, STYLE_TEXT_FONT, font as u32);
     }
     style(label, STYLE_TEXT_COLOR, color);
     stock!(LABEL_SET_LONG_MODE, fn(Obj, u32) -> ())(label, LONG_DOT);
     stock!(LABEL_SET_TEXT, fn(Obj, *const u8) -> ())(label, text);
     stock!(OBJ_SET_POS, fn(Obj, i32, i32) -> ())(label, x, y);
-    stock!(OBJ_SET_SIZE, fn(Obj, i32, i32) -> ())(label, W - x - 24, h);
+    stock!(OBJ_SET_SIZE, fn(Obj, i32, i32) -> ())(label, w, h);
     label
 }
 
-/// `len` bytes of `path` into `buf`; false if the file is missing or short
-fn read(path: &[u8], buf: &mut [u8]) -> bool {
+fn image(parent: Obj, dsc: *const ImgDsc, x: i32, y: i32, side: i32) -> Obj {
+    let img = stock!(VIMG_CREATE, fn(Obj) -> Obj)(parent);
+    if !img.is_null() {
+        stock!(OBJ_SET_POS, fn(Obj, i32, i32) -> ())(img, x, y);
+        stock!(OBJ_SET_SIZE, fn(Obj, i32, i32) -> ())(img, side, side);
+        stock!(VIMG_SET_SRC, fn(Obj, *const ImgDsc) -> ())(img, dsc);
+        stock!(OBJ_ADD_FLAG, fn(Obj, u32) -> ())(img, EVENT_BUBBLE);
+    }
+    img
+}
+
+/// `buf.len()` bytes of `path` from `offset`; false if the file is missing or short
+fn read_at(path: &[u8], offset: u32, buf: &mut [u8]) -> bool {
     let mut file: File = [0; 0x2C];
     if fs::open(&mut file, path, fs::READ) < 0 {
         return false;
     }
-    let ok = fs::read_exact(&mut file, buf);
+    let ok = (offset == 0 || fs::seek(&mut file, offset) == 0) && fs::read_exact(&mut file, buf);
     fs::close(&mut file);
     ok
+}
+
+/// up to `buf.len()` bytes of `path`, how many were read (0 if it is missing)
+fn read_upto(path: &[u8], buf: &mut [u8]) -> usize {
+    let mut file: File = [0; 0x2C];
+    if fs::open(&mut file, path, fs::READ) < 0 {
+        return 0;
+    }
+    let mut done = 0;
+    while done < buf.len() {
+        let n = fs::read(&mut file, &mut buf[done..]);
+        if n <= 0 {
+            break;
+        }
+        done += n as usize;
+    }
+    fs::close(&mut file);
+    done
 }
 
 extern "C" fn create(ctx: *mut Ctx) -> i32 {
@@ -160,42 +201,91 @@ extern "C" fn create(ctx: *mut Ctx) -> i32 {
     }
     let s = unsafe { &mut *ctx.state };
     style(ctx.obj, STYLE_BG_COLOR, CARD_BG);
-    s.font_open = (stock!(FONT_OPEN, fn(*mut u32, *const u8) -> i32)(s.font.as_mut_ptr(), FONT_PATH.as_ptr()) == 0) as u32;
-    let line = if s.font_open != 0 { unsafe { *s.font.as_ptr().add(2) as i32 } } else { 32 }.clamp(1, H);
     let slot = param(ctx.obj).wrapping_sub(1);
-    if slot < wp2_core::layout::SLOTS {
-        // ponytail: read once per layout; the card is laid out again whenever the face shows, and an app only
-        // runs (and writes its record) under the loader view, which deletes the cards (emulator, docs/recon.md)
-        let mut rec = [0u8; WIDGET_REC + 1];
-        if !read(&widget_path(slot), &mut rec[..WIDGET_REC]) {
-            // no record yet: the package name (header +8, 24 bytes NUL-padded) and no value
-            let mut head = [0u8; 8 + WIDGET_TITLE];
-            if !read(&slot_path(slot, false), &mut head) {
-                head[8..13].copy_from_slice(TEXT);
-            }
-            rec = [0; WIDGET_REC + 1];
-            rec[..WIDGET_TITLE].copy_from_slice(&head[8..]);
-        }
-        rec[WIDGET_TITLE - 1] = 0;
-        s.label = label(s, ctx.obj, rec.as_ptr(), GREY, 24, 24, line);
-        s.value = label(s, ctx.obj, rec[WIDGET_TITLE..].as_ptr(), WHITE, 24, 24 + line + 8, H - 48 - line - 8);
+    if slot >= wp2_core::layout::SLOTS {
+        apps(s, ctx.obj);
         return 0;
     }
-    if let Some((block, dsc)) = icon_block() {
-        let img = stock!(VIMG_CREATE, fn(Obj) -> Obj)(ctx.obj);
-        if img.is_null() {
-            unsafe { heap::free(RES, block) };
-        } else {
-            s.block = block;
-            s.icon = img;
-            stock!(OBJ_SET_POS, fn(Obj, i32, i32) -> ())(img, PAD, PAD);
-            stock!(OBJ_SET_SIZE, fn(Obj, i32, i32) -> ())(img, ICON as i32, ICON as i32);
-            stock!(VIMG_SET_SRC, fn(Obj, *const ImgDsc) -> ())(img, dsc);
-            stock!(OBJ_ADD_FLAG, fn(Obj, u32) -> ())(img, EVENT_BUBBLE);
+    // ponytail: read once per layout; the card is laid out again whenever the face shows, and an app only
+    // runs (and writes its record) under the loader view, which deletes the cards (emulator, docs/recon.md)
+    let pkg = slot_path(slot, false);
+    let mut head = [0u8; HEADER_SIZE];
+    let mut name = [0u8; WIDGET_TITLE];
+    let (mut icons, mut trailer) = (0, 0);
+    if read_at(&pkg, 0, &mut head) {
+        name.copy_from_slice(&head[8..8 + WIDGET_TITLE]);
+        // the widget icons: the trailer's head is checked before any icon is read; a bad one means no icons
+        if let Ok(h) = parse_header(&head) {
+            let mut t = [0u8; TRAILER_HEAD];
+            trailer = file_size(&h);
+            if let Some((n, _)) = read_at(&pkg, trailer, &mut t).then(|| trailer_head(&t)).flatten() {
+                icons = n;
+            }
+        }
+    } else {
+        name[..TEXT.len()].copy_from_slice(TEXT);
+    }
+    let mut rec = [0u8; REC_MAX + 1];
+    let n = read_upto(&widget_path(slot), &mut rec);
+    match card(&rec[..n], icons) {
+        Some(Card::Columns(k)) => columns(s, ctx.obj, &rec, k, &pkg, trailer),
+        Some(Card::Text(at)) => {
+            rec[at + WIDGET_TITLE - 1] = 0; // v1 fields are not checked: as before stub 9
+            rec[at + WIDGET_REC] = 0;
+            text(s, ctx.obj, &rec[at..])
+        }
+        // no record, or one this stub does not draw: the package name (header +8, 24 bytes NUL-padded)
+        None => {
+            name[WIDGET_TITLE - 1] = 0;
+            text(s, ctx.obj, &name)
         }
     }
-    s.label = label(s, ctx.obj, TEXT.as_ptr(), WHITE, PAD + ICON as i32 + 20, (H - line) / 2, line);
     0
+}
+
+/// title (grey) and value (white) in font32M; `rec` is NUL-terminated at WIDGET_TITLE - 1 and, if longer, at WIDGET_REC
+fn text(s: &mut State, obj: Obj, rec: &[u8]) {
+    let font = open_font(s, 0, FONT_PATH);
+    let line = if font.is_null() { 32 } else { unsafe { *font.add(2) as i32 } }.clamp(1, H);
+    s.objs[0] = label(obj, font, rec.as_ptr(), GREY, 24, 24, W - 48, line);
+    if rec.len() > WIDGET_TITLE {
+        s.objs[1] = label(obj, font, rec[WIDGET_TITLE..].as_ptr(), WHITE, 24, 24 + line + 8, W - 48, H - 48 - line - 8);
+    }
+}
+
+/// Stock widget 97's layout (create 0x100AC7EC, docs/recon.md "Widget cards"): columns 80 px apart from x 20; the
+/// caption in font24L at y 18 (80×36), the 40 px icon centred on the tile, the value in font24M at y 116, all white.
+/// Fewer than 4 columns share the 320 px evenly.
+fn columns(s: &mut State, obj: Obj, rec: &[u8], k: u8, pkg: &[u8], trailer: u32) {
+    let caption = open_font(s, 0, CAPTION_FONT);
+    let value = open_font(s, 1, VALUE_FONT);
+    let stride = 320 / i32::from(k);
+    for i in 0..usize::from(k) {
+        let col = &rec[COLUMNS_AT + i * COLUMN..];
+        let x = 20 + i as i32 * stride;
+        s.objs[3 * i] = label(obj, caption, col.as_ptr(), WHITE, x, 18, stride, 36);
+        let icon = col[CAPTION];
+        if icon != NO_ICON {
+            let at = trailer + icon_at(icon) as u32;
+            if let Some((block, dsc)) = image_block(ICON_SIDE.into(), |px| read_at(pkg, at, px)) {
+                s.blocks[i] = block;
+                s.objs[3 * i + 1] = image(obj, dsc, x, (H - i32::from(ICON_SIDE)) / 2, ICON_SIDE.into());
+            }
+        }
+        s.objs[3 * i + 2] = label(obj, value, col[CAPTION + 1..].as_ptr(), WHITE, x, 116, stride, 44);
+    }
+}
+
+/// param_id 0: the Custom Apps icon and "Apps"
+fn apps(s: &mut State, obj: Obj) {
+    let font = open_font(s, 0, FONT_PATH);
+    let line = if font.is_null() { 32 } else { unsafe { *font.add(2) as i32 } }.clamp(1, H);
+    if let Some((block, dsc)) = icon_block() {
+        s.blocks[0] = block;
+        s.objs[0] = image(obj, dsc, PAD, PAD, ICON as i32);
+    }
+    let x = PAD + ICON as i32 + 20;
+    s.objs[1] = label(obj, font, TEXT.as_ptr(), WHITE, x, (H - line) / 2, W - x - 24, line);
 }
 
 // Children go before the font and the pixels they use; the stock then frees the state and deletes the screen.
@@ -206,19 +296,23 @@ extern "C" fn delete(ctx: *mut Ctx) -> i32 {
     }
     let s = unsafe { &mut *ctx.state };
     let del = stock!(OBJ_DEL, fn(Obj) -> ());
-    for obj in [&mut s.value, &mut s.label, &mut s.icon] {
+    for obj in s.objs.iter_mut().rev() {
         if !obj.is_null() {
             del(*obj);
             *obj = null_mut();
         }
     }
-    if s.font_open != 0 {
-        stock!(FONT_CLOSE, fn(*mut u32) -> ())(s.font.as_mut_ptr());
-        s.font_open = 0;
+    for i in 0..2 {
+        if s.font_open[i] != 0 {
+            stock!(FONT_CLOSE, fn(*mut u32) -> ())(s.font[i].as_mut_ptr());
+            s.font_open[i] = 0;
+        }
     }
-    if !s.block.is_null() {
-        unsafe { heap::free(RES, s.block) };
-        s.block = null_mut();
+    for block in &mut s.blocks {
+        if !block.is_null() {
+            unsafe { heap::free(RES, *block) };
+            *block = null_mut();
+        }
     }
     0
 }
