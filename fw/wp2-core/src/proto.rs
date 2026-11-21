@@ -68,9 +68,13 @@ pub fn parse(c2: u16, payload: &[u8]) -> Result<Request<'_>, Status> {
         (END, 1) => Ok(Request::End),
         (DELETE, 1) => Ok(Request::Delete(slot(payload[0])?)),
         (PING, 1) => Ok(Request::Ping),
-        // empty data removes the record; a widget record is the whole 64-byte file, a blob up to MSG_MAX bytes
+        // empty data removes the record; a widget record is the whole file: v1 (64 B) or, stub 9, a well-formed v2
+        // (up to 128 B; icon indices are checked against the package when the card is drawn); a blob up to MSG_MAX
         (PUSH, n) if n >= 2 && payload[0] < SLOTS => match (payload[1], n - 2) {
-            (PUSH_WIDGET, 0 | crate::layout::WIDGET_REC) | (PUSH_BLOB, 0..=MSG_MAX) => {
+            (PUSH_WIDGET, 0) | (PUSH_BLOB, 0..=MSG_MAX) => {
+                Ok(Request::Push { slot: payload[0], kind: payload[1], data: &payload[2..] })
+            }
+            (PUSH_WIDGET, _) if crate::widget::card(&payload[2..], crate::widget::ICONS_MAX).is_some() => {
                 Ok(Request::Push { slot: payload[0], kind: payload[1], data: &payload[2..] })
             }
             _ => Err(Status::BadRequest),
@@ -120,6 +124,15 @@ mod tests {
         assert_eq!(parse(PUSH, &p[..66]), Ok(Request::Push { slot: 15, kind: 0, data: &p[2..66] }));
         assert_eq!(parse(PUSH, &p[..2]), Ok(Request::Push { slot: 15, kind: 0, data: &[] }));
         assert_eq!(parse(PUSH, &p[..65]), Err(Status::BadRequest));
+        // stub 9: a v2 record (up to 128 B) only when well-formed
+        let mut v2 = [0u8; 2 + 3 + 21];
+        v2[..5].copy_from_slice(&[15, PUSH_WIDGET, 0xFF, 1, 1]);
+        v2[5 + 10] = 0xFF;
+        assert_eq!(parse(PUSH, &v2), Ok(Request::Push { slot: 15, kind: 0, data: &v2[2..] }), "one column, 24 B");
+        v2[5] = b'x';
+        v2[5..15].fill(b'x');
+        assert_eq!(parse(PUSH, &v2), Err(Status::BadRequest), "caption without a NUL");
+        assert_eq!(parse(PUSH, &[15, PUSH_WIDGET, 0xFF, 9]), Err(Status::BadRequest), "unknown template");
         p[1] = PUSH_BLOB;
         assert!(matches!(parse(PUSH, &p), Ok(Request::Push { kind: 1, .. })));
         assert_eq!(parse(PUSH, &[15, PUSH_BLOB, 9]), Ok(Request::Push { slot: 15, kind: 1, data: &[9] }));

@@ -16,7 +16,9 @@ pub const LOADER_ABI_MINOR: u16 = 3;
 // 6 = installs into the loader or a page's app while the page is behind the face
 // 7 = DELETE of a page's app behind the face takes its page and widgets off the cards
 // 8 = 16 app slots (8..15 in files 8.pkg, 9.pkg, A.pkg..F.pkg, pages 0x100..0x107); StubRam.stub_version
-pub const STUB_VERSION: u32 = 8;
+// 9 = widget templates: v2 `.wgt` records (`text`, `columns`), widget icons from the package trailer, PUSH kind 00
+//     takes v2 records (wp2_core::widget, docs/widget-push.md)
+pub const STUB_VERSION: u32 = 9;
 // INFO for this slot answers the stub's version instead of a package header; an older stub answers BadRequest
 pub const STUB_SLOT: u8 = 0xFE;
 pub const STUB_RAM: u32 = 0x3871_EEC0;
@@ -39,8 +41,8 @@ pub fn data_path(slot: u8, new: bool) -> [u8; 24] {
     file_path(slot, if new { b"new" } else { b"dat" })
 }
 
-// the app's widget record (docs/app-guide.md, "Widget"): WIDGET_REC bytes, title at 0, value at WIDGET_TITLE, each
-// NUL-terminated; written by the loader for the app, read by the stub when a card with widget 0x40/(slot + 1) is laid out
+// the app's widget record (docs/app-guide.md, "Widget"): v1 is WIDGET_REC bytes, title at 0, value at WIDGET_TITLE,
+// each NUL-terminated; stub 9 also draws v2 records of up to widget::REC_MAX bytes (wp2_core::widget); written by the loader for the app, read by the stub when a card with widget 0x40/(slot + 1) is laid out
 pub fn widget_path(slot: u8) -> [u8; 24] {
     file_path(slot, b"wgt")
 }

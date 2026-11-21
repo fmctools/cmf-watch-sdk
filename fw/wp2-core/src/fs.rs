@@ -1,6 +1,6 @@
 // Zephyr fs calls of the stock image. Paths must be NUL-terminated.
 use crate::layout::E_BAD;
-use crate::stock::{FS_CLOSE, FS_FIND_MOUNT, FS_OPEN, FS_READ, FS_RENAME, FS_UNLINK, FS_WRITE};
+use crate::stock::{FS_CLOSE, FS_FIND_MOUNT, FS_OPEN, FS_READ, FS_RENAME, FS_SEEK, FS_UNLINK, FS_WRITE};
 use core::mem::transmute;
 
 pub type File = [u8; 0x2C];
@@ -30,6 +30,12 @@ pub fn read(file: &mut File, buf: &mut [u8]) -> i32 {
 pub fn write(file: &mut File, buf: &[u8]) -> i32 {
     let f: extern "C" fn(*mut File, *const u8, usize) -> i32 = unsafe { transmute(FS_WRITE as usize) };
     f(file, buf.as_ptr(), buf.len())
+}
+
+// from the start of the file (FS_SEEK_SET)
+pub fn seek(file: &mut File, offset: u32) -> i32 {
+    let f: extern "C" fn(*mut File, i32, i32) -> i32 = unsafe { transmute(FS_SEEK as usize) };
+    f(file, offset as i32, 0)
 }
 
 pub fn close(file: &mut File) -> i32 {

@@ -528,11 +528,14 @@ pub fn focus_shape(d: i32) -> (i32, u32, u32) {
     }
 }
 
-/// WIDGET record (op 0x14, handle 0, payload = the 64-byte widget record, docs/app-guide.md "Widget"), alone in a
-/// batch: the loader writes it to the app's N.wgt on the app thread. On an older loader op 0x14 is `Malformed`.
-pub fn widget(buf: &[u8]) -> Option<&[u8; crate::layout::WIDGET_REC]> {
+/// WIDGET record (op 0x14, handle 0, payload = the widget record, 1..=128 bytes, docs/app-guide.md "Widget"), alone
+/// in a batch: the loader writes it to the app's N.wgt on the app thread. Before 2026-11-21 the loader took exactly
+/// 64 bytes; on an older loader still op 0x14 is `Malformed`.
+pub fn widget(buf: &[u8]) -> Option<&[u8]> {
     match buf {
-        [0x14, 64, 0, 0, rec @ ..] => rec.try_into().ok(),
+        [0x14, n, 0, 0, rec @ ..] if usize::from(*n) == rec.len() && (1..=crate::widget::REC_MAX).contains(&rec.len()) => {
+            Some(rec)
+        }
         _ => None,
     }
 }
@@ -1019,7 +1022,14 @@ mod tests {
         let got = widget(&rec).expect("a widget record");
         assert_eq!(&got[..14], b"Vibration Lab\0");
         assert_eq!(&got[24..48], b"Strength 35%\nFreq 170Hz\0");
-        assert_eq!(widget(&rec[..67]), None, "short");
+        assert_eq!(widget(&rec[..67]), None, "length byte says 64");
+        let mut v2 = vec![0x14, 87, 0, 0];
+        v2.extend_from_slice(&[0; 87]);
+        assert_eq!(widget(&v2).map(<[u8]>::len), Some(87));
+        assert_eq!(widget(&v2[..90]), None, "length byte and payload differ");
+        let mut big = vec![0x14, 129, 0, 0];
+        big.extend_from_slice(&[0; 129]);
+        assert_eq!(widget(&big), None);
         assert_eq!(widget(&[0x13, 2, 0, 0, 1, 1]), None);
     }
 
