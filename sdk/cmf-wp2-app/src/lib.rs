@@ -337,6 +337,32 @@ impl Api {
         (self.lv_submit)(buf.as_ptr(), buf.len())
     }
 
+    /// A `columns` card (stub 9, docs/app-guide.md "Widget"): one to four columns, each a caption, one of the app's
+    /// widget icons (`widget-icons/` next to `Cargo.toml`, by index in file name order) and a value, laid out as the
+    /// stock weather-by-hour widget. Text over 9 bytes is cut at a char boundary. `0`; `-22` when the watch's stub
+    /// cannot draw it (before stub 9, or a loader before 2026-11-21), for 0 or more than 4 columns or an icon index
+    /// over 15: fall back to [`Api::widget`]. Writes NAND like `widget`.
+    pub fn widget_columns(&self, columns: &[Column]) -> i32 {
+        match columns_record(columns) {
+            Some((rec, n)) => self.widget_v2(&rec[..n]),
+            None => -22,
+        }
+    }
+
+    /// A v2 widget record as is (`FF ‖ template ‖ fields`, up to 128 bytes, docs/widget-push.md). `-22` for a record
+    /// the loader refuses or the running stub does not draw.
+    pub fn widget_v2(&self, rec: &[u8]) -> i32 {
+        if self.abi_minor < 2 || rec.is_empty() || rec.len() > WIDGET_V2_MAX {
+            return -22;
+        }
+        // lv_submit takes only buffers inside the app block: a static, not the stack
+        static mut BUF: [u8; 4 + WIDGET_V2_MAX] = [0; 4 + WIDGET_V2_MAX];
+        let buf = unsafe { &mut *core::ptr::addr_of_mut!(BUF) };
+        buf[..4].copy_from_slice(&[0x14, rec.len() as u8, 0, 0]);
+        buf[4..4 + rec.len()].copy_from_slice(rec);
+        (self.lv_submit)(buf.as_ptr(), 4 + rec.len())
+    }
+
     /// `true` when the app runs as its page next to the watch face (`app_features!(PAGE)`, docs/app-guide.md "Page"),
     /// `false` in the Apps menu and on a loader without pages. On a page the crown and the button stay with the
     /// watch (no BUTTON), and swiping away gives PAUSE, back RESUME.
@@ -358,19 +384,48 @@ impl Api {
 }
 
 const WIDGET_BATCH: usize = 4 + 64;
+const WIDGET_V2_MAX: usize = 128;
+
+/// One column of [`Api::widget_columns`]: `icon` is an index into the app's widget icons, `None` for none.
+#[derive(Clone, Copy, Debug)]
+pub struct Column<'a> {
+    pub caption: &'a str,
+    pub icon: Option<u8>,
+    pub value: &'a str,
+}
+
+/// The v2 `columns` record (`FF 01 n`, then per column caption[10] ‖ icon ‖ value[10]) and its length; None for 0
+/// or more than 4 columns or an icon over 15. The same bytes as `wp2apps.install.columns_record`.
+#[doc(hidden)]
+pub fn columns_record(columns: &[Column]) -> Option<([u8; WIDGET_V2_MAX], usize)> {
+    if columns.is_empty() || columns.len() > 4 || columns.iter().any(|c| c.icon.is_some_and(|i| i > 15)) {
+        return None;
+    }
+    let mut out = [0u8; WIDGET_V2_MAX];
+    out[..3].copy_from_slice(&[0xFF, 1, columns.len() as u8]);
+    for (i, c) in columns.iter().enumerate() {
+        let at = 3 + 21 * i;
+        put(&mut out[at..at + 10], c.caption);
+        out[at + 10] = c.icon.unwrap_or(0xFF);
+        put(&mut out[at + 11..at + 21], c.value);
+    }
+    Some((out, 3 + 21 * columns.len()))
+}
+
+/// `s` into `out`, cut at a char boundary so a NUL stays
+fn put(out: &mut [u8], s: &str) {
+    let mut n = s.len().min(out.len() - 1);
+    while !s.is_char_boundary(n) {
+        n -= 1;
+    }
+    out[..n].copy_from_slice(&s.as_bytes()[..n]);
+}
 
 /// WIDGET record for `lv_submit` (op 0x14, handle 0): title NUL-padded to 24 bytes, then the value NUL-padded to 40.
 #[doc(hidden)]
 pub fn widget_record(title: &str, value: &str) -> [u8; WIDGET_BATCH] {
     let mut out = [0u8; WIDGET_BATCH];
     out[..4].copy_from_slice(&[0x14, 64, 0, 0]);
-    let put = |out: &mut [u8], s: &str| {
-        let mut n = s.len().min(out.len() - 1);
-        while !s.is_char_boundary(n) {
-            n -= 1;
-        }
-        out[..n].copy_from_slice(&s.as_bytes()[..n]);
-    };
     put(&mut out[4..28], title);
     put(&mut out[28..], value);
     out
@@ -510,6 +565,20 @@ mod tests {
         assert!(end <= 23 && core::str::from_utf8(&title[..end]).is_ok());
         assert_eq!(&r[28..35], b"72 bpm\0");
         assert_eq!(widget_record("", &"x".repeat(80))[28 + 39], 0, "value keeps its NUL");
+    }
+
+    #[test]
+    fn columns_record_golden() {
+        // tests/test_install.py COLUMNS: wp2apps.install.columns_record gives the same bytes
+        let c = |caption, icon, value| Column { caption, icon, value };
+        let (r, n) = columns_record(&[c("Now", Some(0), "-3°"), c("23:00", Some(1), "4°"), c("00:00", None, "--")]).unwrap();
+        let hex: std::string::String = r[..n].iter().map(|b| std::format!("{b:02x}")).collect();
+        assert_eq!(hex, "ff01034e6f7700000000000000002d33c2b000000000000032333a303000000000000134c2b00000000000000030303a30300000000000ff2d2d0000000000000000");
+        assert!(columns_record(&[]).is_none());
+        assert!(columns_record(&[c("a", None, "b"); 5]).is_none());
+        assert!(columns_record(&[c("a", Some(16), "b")]).is_none());
+        let (r, n) = columns_record(&[c("ééééé", Some(15), "x")]).unwrap();
+        assert_eq!((n, &r[3..13]), (24, "éééé\0\0".as_bytes()));
     }
 
     extern "C" fn rect(_: i16, _: i16, _: u16, _: u16, _: u16) {}

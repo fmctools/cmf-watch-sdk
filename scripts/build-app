@@ -14,11 +14,27 @@ if [ -f "$svg" ]; then
     fi
     (cd "$root" && uv run --locked python -m wp2apps.icon "${WP2_ICON%.wp2icon}.png" "$WP2_ICON")
 fi
+# widget icons (docs/app-icons.md): widget-icons/NN-name.svg, 40x40, index = file name order; into the package trailer
+pack_icons=()
+icons=$root/sdk/examples/$name/widget-icons
+if compgen -G "$icons/*.svg" >/dev/null; then
+    out=$root/sdk/target/widget-icons/$name
+    rm -rf "$out" && mkdir -p "$out"
+    for svg in "$icons"/*.svg; do
+        png=$out/$(basename "${svg%.svg}").png
+        if command -v resvg >/dev/null; then
+            resvg -w 40 -h 40 "$svg" "$png"
+        else
+            nix-shell -p resvg --run "resvg -w 40 -h 40 '$svg' '$png'"
+        fi
+    done
+    pack_icons=(--widget-icons "$out")
+fi
 (cd "$root/sdk" && cargo build --release -p "$name")
 mkdir -p "$root/target"
 llvm-objcopy -O binary --set-section-flags .data=alloc,load,contents "$root/sdk/target/thumbv7em-none-eabi/release/$name" "$root/target/$name.bin"
 rm -f "$root/target/$name.wp2app"
 cd "$root"
 uv run --locked wp2apps pack "target/$name.bin" --elf "sdk/target/thumbv7em-none-eabi/release/$name" \
-    --name "$name" --version "$version" --output "target/$name.wp2app"
+    --name "$name" --version "$version" --output "target/$name.wp2app" ${pack_icons[@]+"${pack_icons[@]}"}
 echo "$root/target/$name.wp2app"

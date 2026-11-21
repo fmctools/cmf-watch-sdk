@@ -1,0 +1,13 @@
+[package]
+name = "widget-columns"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[dependencies]
+cmf-wp2-app = { path = "../../cmf-wp2-app" }
+
+[[bin]]
+name = "widget-columns"
+test = false
+bench = false

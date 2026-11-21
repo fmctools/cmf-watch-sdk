@@ -122,5 +122,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "widget-columns"
+version = "0.1.0"
+dependencies = [
+ "cmf-wp2-app",
+]
+
+[[package]]
 name = "wp2-core"
 version = "0.1.0"

@@ -165,6 +165,17 @@ mod tests {
     }
 
     #[test]
+    fn sdk_records_pass() {
+        let c = |caption, icon, value| cmf_wp2_app::Column { caption, icon, value };
+        let (r, n) = cmf_wp2_app::columns_record(&[c("Now", Some(0), "-3°"), c("23:00", Some(2), "4°")]).unwrap();
+        assert_eq!(card(&r[..n], 3), Some(Card::Columns(2)));
+        assert_eq!(card(&r[..n], 2), None, "icon 2 of a package with 2");
+        assert!(accepts(&r[..n], 9));
+        let v1 = cmf_wp2_app::widget_record("Hello", "x");
+        assert_eq!(card(&v1[4..], 0), Some(Card::Text(0)));
+    }
+
+    #[test]
     fn loader_gate() {
         let r = columns(&[(b"Now", 15, b"1")]);
         assert!(accepts(&r, 9));
