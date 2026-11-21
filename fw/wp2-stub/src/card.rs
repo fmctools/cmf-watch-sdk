@@ -37,6 +37,8 @@ const VIMG_CREATE: u32 = 0x1005A015;
 const VIMG_SET_SRC: u32 = 0x1005A02D;
 const FONT_OPEN: u32 = 0x10185C31;
 const FONT_CLOSE: u32 = 0x10185D3D;
+/// the stock widgets' font open (0x100DF9A0): FONT_OPEN, then line_height + 4 for font24M (docs/recon.md)
+const STOCK_FONT_OPEN: u32 = 0x100DF9A1;
 
 const STYLE_BG_COLOR: u32 = 0x20;
 const STYLE_TEXT_COLOR: u32 = 0x55;
@@ -131,8 +133,9 @@ fn param(obj: Obj) -> u8 {
     unsafe { *obj.add(USER_DATA) }
 }
 
-fn open_font(s: &mut State, i: usize, path: &[u8]) -> *const u32 {
-    s.font_open[i] = (stock!(FONT_OPEN, fn(*mut u32, *const u8) -> i32)(s.font[i].as_mut_ptr(), path.as_ptr()) == 0) as u32;
+/// `open`: FONT_OPEN, or STOCK_FONT_OPEN as the stock widgets (it adds their line spacing to font24M and others)
+fn open_font(s: &mut State, i: usize, open: u32, path: &[u8]) -> *const u32 {
+    s.font_open[i] = (stock!(open, fn(*mut u32, *const u8) -> i32)(s.font[i].as_mut_ptr(), path.as_ptr()) == 0) as u32;
     if s.font_open[i] != 0 { s.font[i].as_ptr() } else { core::ptr::null() }
 }
 
@@ -228,7 +231,7 @@ extern "C" fn create(ctx: *mut Ctx) -> i32 {
     let mut rec = [0u8; REC_MAX + 1];
     let n = read_upto(&widget_path(slot), &mut rec);
     match card(&rec[..n], icons) {
-        Some(Card::Columns(k)) => columns(s, ctx.obj, &rec, k, &pkg, trailer),
+        Some(Card::Columns(k)) => columns(s, ctx.obj, &mut rec, k, &pkg, trailer),
         Some(Card::Text(at)) => {
             rec[at + WIDGET_TITLE - 1] = 0; // v1 fields are not checked: as before stub 9
             rec[at + WIDGET_REC] = 0;
@@ -245,7 +248,7 @@ extern "C" fn create(ctx: *mut Ctx) -> i32 {
 
 /// title (grey) and value (white) in font32M; `rec` is NUL-terminated at WIDGET_TITLE - 1 and, if longer, at WIDGET_REC
 fn text(s: &mut State, obj: Obj, rec: &[u8]) {
-    let font = open_font(s, 0, FONT_PATH);
+    let font = open_font(s, 0, FONT_OPEN, FONT_PATH);
     let line = if font.is_null() { 32 } else { unsafe { *font.add(2) as i32 } }.clamp(1, H);
     s.objs[0] = label(obj, font, rec.as_ptr(), GREY, 24, 24, W - 48, line);
     if rec.len() > WIDGET_TITLE {
@@ -255,10 +258,16 @@ fn text(s: &mut State, obj: Obj, rec: &[u8]) {
 
 /// Stock widget 97's layout (create 0x100AC7EC, docs/recon.md "Widget cards"): columns 80 px apart from x 20; the
 /// caption in font24L at y 18 (80×36), the 40 px icon centred on the tile, the value in font24M at y 116, all white.
-/// Fewer than 4 columns share the 320 px evenly.
-fn columns(s: &mut State, obj: Obj, rec: &[u8], k: u8, pkg: &[u8], trailer: u32) {
-    let caption = open_font(s, 0, CAPTION_FONT);
-    let value = open_font(s, 1, VALUE_FONT);
+/// Fewer than 4 columns share the 320 px evenly. `°` (C2 B0) is drawn as `º` (C2 BA): the stock fonts have only that
+/// one, and 97 writes its temperatures with it (emulator).
+fn columns(s: &mut State, obj: Obj, rec: &mut [u8], k: u8, pkg: &[u8], trailer: u32) {
+    for i in 1..rec.len() {
+        if rec[i - 1] == 0xC2 && rec[i] == 0xB0 {
+            rec[i] = 0xBA;
+        }
+    }
+    let caption = open_font(s, 0, STOCK_FONT_OPEN, CAPTION_FONT);
+    let value = open_font(s, 1, STOCK_FONT_OPEN, VALUE_FONT);
     let stride = 320 / i32::from(k);
     for i in 0..usize::from(k) {
         let col = &rec[COLUMNS_AT + i * COLUMN..];
@@ -278,7 +287,7 @@ fn columns(s: &mut State, obj: Obj, rec: &[u8], k: u8, pkg: &[u8], trailer: u32)
 
 /// param_id 0: the Custom Apps icon and "Apps"
 fn apps(s: &mut State, obj: Obj) {
-    let font = open_font(s, 0, FONT_PATH);
+    let font = open_font(s, 0, FONT_OPEN, FONT_PATH);
     let line = if font.is_null() { 32 } else { unsafe { *font.add(2) as i32 } }.clamp(1, H);
     if let Some((block, dsc)) = icon_block() {
         s.blocks[0] = block;
