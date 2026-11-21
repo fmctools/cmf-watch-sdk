@@ -28,6 +28,7 @@ palette unless the owner asks.
 docs/specs/   design documents
 docs/plans/   implementation plans
 docs/recon.md stock app.bin findings for the loader (from plan 1, task 1)
+docs/storage-inspection.md read-only storage/app-catalog service (Storage::open probes for it)
 src/wp2apps/  Python CLI: package, inspect and install apps
 sdk/          Rust workspace: cmf-wp2-app crate and example apps
 fw/           Rust workspace: wp2-core (shared no_std logic, host-tested), stub and loader
@@ -52,7 +53,3 @@ uv run --locked python -m unittest discover -s tests -v
 (cd fw && cargo test -p wp2-core --target aarch64-apple-darwin)
 ```
 
-
-## Read-only inspection additions
-
-`docs/storage-inspection.md` defines the typed storage/catalog service and installed-app icon record. New code probes with `Storage::open`; ABI minor alone is not a capability check. Keep old commands, package/Api layouts and the scalar-preview compatibility path working. Filesystem totals are data-cluster capacity; partition reservations and logical file lengths are different measures. UI-thread serialization and app-stop cleanup must be retained. Do not claim this WP2 backend works on another firmware or watch without deriving and testing its stock calls.

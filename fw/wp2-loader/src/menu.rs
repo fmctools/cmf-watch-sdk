@@ -95,7 +95,7 @@ pub fn scan() -> [Option<Entry>; ROWS] {
     let mut out = [None; ROWS];
     for (row, &(e, icon)) in found.iter().enumerate() {
         out[row] = e;
-        lv::set_icon(row,e.map_or(255,|e|e.slot),icon);
+        lv::set_icon(row, e.map_or(255, |e| e.slot), icon);
     }
     out
 }
@@ -289,49 +289,63 @@ pub mod lv {
         block
     }
 
-    pub fn set_icon(row: usize, slot:u8, block: *mut u8) {
-        let u=ui();
-        unsafe { heap::free(RES,u.thumbs[row]); }
-        u.thumbs[row]=null_mut();u.thumb_dsc[row]=NO_DSC;
-        u.slots[row]=slot;
-        let old = core::mem::replace(&mut ui().icons[row], block);
+    pub fn set_icon(row: usize, slot: u8, block: *mut u8) {
+        let u = ui();
+        unsafe { heap::free(RES, u.thumbs[row]) };
+        (u.thumbs[row], u.thumb_dsc[row], u.slots[row]) = (null_mut(), NO_DSC, slot);
+        let old = core::mem::replace(&mut u.icons[row], block);
         unsafe { heap::free(RES, old) };
     }
 
-    // UI thread only. At most sixteen 64px thumbnails, allocated lazily; descriptors live with the menu.
-    pub fn app_icon(obj:Obj,slot:u8,side:u8)->Result<(),i32> {
-        let u=ui();
-        style(obj,LV_STYLE_BG_IMG_SRC,0,0);
-        let Some(i)=(0..ROWS).find(|&i|u.slots[i]==slot && !u.icons[i].is_null()) else{return Ok(());};
-        if side==96 {
-            u.dsc[i]=ImgDsc{header:CF_TRUE_COLOR_ALPHA|ICON_SIDE<<10|ICON_SIDE<<21,size:ICON_BYTES,data:unsafe{u.icons[i].add(HEAD)}};
-            style(obj,LV_STYLE_BG_IMG_SRC,&u.dsc[i] as *const ImgDsc as u32,0);
+    /// UI thread, app batch (`Batch::installed_app_icon`). The 96px icon is the menu's own descriptor (set in
+    /// `build`); a 64px thumbnail is scaled lazily, one per row, freed in `clear_app_icons` or on rescan.
+    pub fn app_icon(obj: Obj, slot: u8, side: u8) -> Result<(), i32> {
+        const SIDE: u32 = 64;
+        const BYTES: u32 = SIDE * SIDE * 3;
+        const TOTAL: u32 = HEAD as u32 + BYTES;
+        let u = ui();
+        style(obj, LV_STYLE_BG_IMG_SRC, 0, 0);
+        let Some(i) = (0..ROWS).find(|&i| u.slots[i] == slot && !u.icons[i].is_null()) else {
+            return Ok(());
+        };
+        if side == ICON_SIDE as u8 {
+            style(obj, LV_STYLE_BG_IMG_SRC, &u.dsc[i] as *const ImgDsc as u32, 0);
             return Ok(());
         }
-        const SIDE:u32=64; const BYTES:u32=SIDE*SIDE*3; const TOTAL:u32=(64+BYTES+63)&!63;
         if u.thumbs[i].is_null() {
-            let block=heap::alloc(RES,TOTAL,0x40); if block.is_null(){return Ok(());}
-            unsafe {
-                let px=block.add(64);let src=u.icons[i].add(HEAD);
-                for y in 0..SIDE as usize {for x in 0..SIDE as usize {
-                    let from=((y*96/64)*96+x*96/64)*3;let to=(y*64+x)*3;
-                    core::ptr::copy_nonoverlapping(src.add(from),px.add(to),3);
-                }}
-                let h=core::slice::from_raw_parts_mut(block as *mut u32,16);h.fill(0);
-                (h[2],h[4],h[5],h[6],h[8])=(TOTAL,SIDE,SIDE,3,px as u32);
-                u.thumb_dsc[i]=ImgDsc{header:CF_TRUE_COLOR_ALPHA|SIDE<<10|SIDE<<21,size:BYTES,data:px};
+            let block = heap::alloc(RES, TOTAL, 0x40);
+            if block.is_null() {
+                return Ok(());
             }
-            sync_psram(block,TOTAL);u.thumbs[i]=block;
+            let (src, px) = unsafe { (u.icons[i].add(HEAD), block.add(HEAD)) };
+            let n = ICON_SIDE as usize;
+            for y in 0..SIDE as usize {
+                for x in 0..SIDE as usize {
+                    // nearest neighbour, 3 bytes per pixel (RGB565 + alpha)
+                    let from = ((y * n / SIDE as usize) * n + x * n / SIDE as usize) * 3;
+                    unsafe { core::ptr::copy_nonoverlapping(src.add(from), px.add((y * SIDE as usize + x) * 3), 3) };
+                }
+            }
+            // same block header as read_icon
+            let head = unsafe { core::slice::from_raw_parts_mut(block as *mut u32, HEAD / 4) };
+            head.fill(0);
+            (head[2], head[4], head[5], head[6], head[8]) = (TOTAL, SIDE, SIDE, 3, px as u32);
+            sync_psram(block, TOTAL);
+            u.thumbs[i] = block;
+            u.thumb_dsc[i] = ImgDsc { header: CF_TRUE_COLOR_ALPHA | SIDE << 10 | SIDE << 21, size: BYTES, data: px };
         }
-        style(obj,LV_STYLE_BG_IMG_SRC, &u.thumb_dsc[i] as *const ImgDsc as u32,0);
+        style(obj, LV_STYLE_BG_IMG_SRC, &u.thumb_dsc[i] as *const ImgDsc as u32, 0);
         Ok(())
     }
 
     /// UI thread, after app LVGL objects have been deleted. Menu-native pixels remain intact.
     pub fn clear_app_icons() {
-        let u=ui();
-        for b in &mut u.thumbs {unsafe {heap::free(RES,*b)};*b=null_mut();}
-        u.thumb_dsc=[NO_DSC;ROWS];
+        let u = ui();
+        for b in &mut u.thumbs {
+            unsafe { heap::free(RES, *b) };
+            *b = null_mut();
+        }
+        u.thumb_dsc = [NO_DSC; ROWS];
     }
 
     fn style(obj: Obj, prop: u32, value: u32, selector: u32) {
@@ -506,8 +520,8 @@ pub mod lv {
             unsafe { heap::free(RES, *b) };
             *b = null_mut();
         }
-        for b in &mut u.thumbs { unsafe {heap::free(RES,*b)}; *b=null_mut(); }
-        u.thumb_dsc=[NO_DSC; ROWS];u.slots=[255; ROWS];
+        clear_app_icons();
+        u.slots = [255; ROWS];
         u.dsc = [NO_DSC; ROWS];
         u.cont = null_mut();
         u.bar = null_mut();

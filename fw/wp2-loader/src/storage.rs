@@ -1,12 +1,10 @@
 //! JX402 1.0.0.73 read-only metadata service. UI thread only; see docs/storage-inspection.md.
 use core::mem::transmute;
-use wp2_core::{fs, layout, pkg, storage};
+use wp2_core::{fs, layout, pkg, stock, storage};
 
 // Verified from partition_init at 0x100f6f40; stock validates this ACPT pointer at boot.
 const TABLE_PTR: usize = 0x3801_f1e8;
 const FAT_OPS: u32 = 0x101f_6ac0;
-static mut METRICS: [u32; 8] = [0; 8];
-static mut METRICS_READY: bool = false;
 
 fn table() -> Result<&'static [u8], i32> {
     let p = unsafe { (TABLE_PTR as *const u32).read_volatile() } as usize;
@@ -20,7 +18,7 @@ fn table() -> Result<&'static [u8], i32> {
 fn mount() -> Result<u32, i32> {
     let mut mp = 0;
     let find: extern "C" fn(*mut u32, *const u8, *mut usize) -> i32 =
-        unsafe { transmute(wp2_core::stock::FS_FIND_MOUNT as usize) };
+        unsafe { transmute(stock::FS_FIND_MOUNT as usize) };
     let rc = find(&mut mp, c"/NAND:".as_ptr().cast(), core::ptr::null_mut());
     if rc < 0 {
         return Err(rc);
@@ -34,11 +32,10 @@ fn mount() -> Result<u32, i32> {
     Ok(mp)
 }
 fn size(mp: u32, path: &[u8]) -> Result<u32, i32> {
-    // Production uses a one-byte entry type, name[256], padding, u32 size at +0x104.
-    // Deliberately not the SDK's enum-sized fs_dirent layout.
+    // Production dirent, see stock::FS_STAT.
     let mut entry = [0u32; 66];
     let stat: extern "C" fn(u32, *const u8, *mut u32) -> i32 =
-        unsafe { transmute(0x1010_7dc1usize) };
+        unsafe { transmute(stock::FS_STAT as usize) };
     let rc = stat(mp, path.as_ptr(), entry.as_mut_ptr());
     if rc == -2 {
         return Ok(0);
@@ -48,26 +45,20 @@ fn size(mp: u32, path: &[u8]) -> Result<u32, i32> {
     }
     Ok(entry[65])
 }
-fn refresh() -> Result<i32, i32> {
-    unsafe {
-        METRICS = [0; 8];
-        METRICS_READY = false;
-    }
+fn refresh() -> Result<[u32; 8], i32> {
     let mp = mount()?;
-    let stat: extern "C" fn(u32, *const u8, *mut u32) -> i32 =
-        unsafe { transmute(0x101b_f769usize) };
+    let statvfs: extern "C" fn(u32, *const u8, *mut u32) -> i32 =
+        unsafe { transmute(stock::FS_STATVFS as usize) };
     let mut raw = [0; 4];
-    let rc = stat(mp, c"/NAND:".as_ptr().cast(), raw.as_mut_ptr());
+    let rc = statvfs(mp, c"/NAND:".as_ptr().cast(), raw.as_mut_ptr());
     if rc < 0 {
         return Err(rc);
     }
     let (total, free) = storage::capacity(&raw)?;
-    let (mut packages, mut data, mut widgets, mut slots) = (0u32, 0u32, 0u32, 0i32);
+    let (mut packages, mut data, mut widgets, mut slots) = (0u32, 0u32, 0u32, 0u32);
     for slot in 0..layout::stub_ram().slots() {
         let n = size(mp, &layout::slot_path(slot, false))?;
-        if n > 0 {
-            slots += 1;
-        }
+        slots += (n > 0) as u32;
         packages = packages.checked_add(n).ok_or(-75)?;
         data = data
             .checked_add(size(mp, &layout::data_path(slot, false))?)
@@ -77,26 +68,7 @@ fn refresh() -> Result<i32, i32> {
             .ok_or(-75)?;
     }
     let loader = size(mp, &layout::slot_path(layout::LOADER_SLOT, false))?;
-    scan_apps();
-    let vals = [
-        total,
-        free,
-        packages,
-        data,
-        widgets,
-        loader,
-        slots as u32,
-        raw[1],
-    ];
-    for (i, v) in vals.into_iter().enumerate() {
-        unsafe {
-            METRICS[i] = v;
-        }
-    }
-    unsafe {
-        METRICS_READY = true;
-    }
-    Ok(0)
+    Ok([total, free, packages, data, widgets, loader, slots, raw[1]])
 }
 // Bounded snapshot: one directory entry per step, one open directory, explicit partial/error state.
 // FAT operation addresses and byte-sized fs_dirent type match the saved stock vtable audit.
@@ -115,12 +87,6 @@ struct AppInfo {
     valid: bool,
     icon: bool,
 }
-static mut APPS: [AppInfo; layout::SLOTS as usize] = [AppInfo {
-    name: [0; 24],
-    version: 0,
-    valid: false,
-    icon: false,
-}; layout::SLOTS as usize];
 struct ScanBuffer {
     files: [FileInfo; FILE_MAX],
     dirs: [[u8; PATH_MAX]; DIR_MAX],
@@ -180,16 +146,10 @@ fn read_app(slot: u8) -> AppInfo {
     }
     info
 }
-fn scan_apps() {
-    for slot in 0..layout::stub_ram().slots() {
-        unsafe {
-            APPS[slot as usize] = read_app(slot);
-        }
-    }
-}
 fn close_dir() {
     if unsafe { DIR_OPEN } {
-        let close: extern "C" fn(*mut u32) -> i32 = unsafe { transmute(0x1010_7ae9usize) };
+        let close: extern "C" fn(*mut u32) -> i32 =
+            unsafe { transmute(stock::FS_CLOSEDIR as usize) };
         let rc = close(core::ptr::addr_of_mut!(DIR).cast());
         unsafe {
             DIR_OPEN = false;
@@ -229,7 +189,7 @@ fn scan_step() -> Result<i32, i32> {
     }
     if !unsafe { DIR_OPEN } {
         let open: extern "C" fn(*mut u32, *const u8) -> i32 =
-            unsafe { transmute(0x1010_7d09usize) };
+            unsafe { transmute(stock::FS_OPENDIR as usize) };
         unsafe {
             DIR = [0; 4];
         }
@@ -249,7 +209,8 @@ fn scan_step() -> Result<i32, i32> {
         }
     }
     let mut entry = [0u32; 66];
-    let read: extern "C" fn(*mut u32, *mut u32) -> i32 = unsafe { transmute(0x1010_7e09usize) };
+    let read: extern "C" fn(*mut u32, *mut u32) -> i32 =
+        unsafe { transmute(stock::FS_READDIR as usize) };
     let rc = read(core::ptr::addr_of_mut!(DIR).cast(), entry.as_mut_ptr());
     let raw = unsafe { core::slice::from_raw_parts(entry.as_ptr().cast::<u8>(), 264) };
     if rc < 0 || raw[1] == 0 {
@@ -329,16 +290,15 @@ pub fn execute(buf: &mut [u8]) -> i32 {
             0 if i == 0 => {
                 out[..2].copy_from_slice(&(storage::VERSION as u16).to_le_bytes());
                 out[2] = layout::stub_ram().slots();
-                out[3] = 30;
+                out[3] = storage::MAX_PARTITIONS as u8;
                 out[4..6].copy_from_slice(&(FILE_MAX as u16).to_le_bytes());
                 out[6..8].copy_from_slice(&(DIR_MAX as u16).to_le_bytes());
                 out[8..10].copy_from_slice(&(PATH_MAX as u16).to_le_bytes());
                 out[10] = 3;
             }
             1 if i == 0 => {
-                refresh()?;
-                for n in 0..8 {
-                    put(out, n * 4, unsafe { METRICS[n] });
+                for (n, v) in refresh()?.into_iter().enumerate() {
+                    put(out, n * 4, v);
                 }
             }
             2 if i == 0 => {
@@ -387,67 +347,4 @@ pub fn execute(buf: &mut [u8]) -> i32 {
         Ok(())
     })();
     result.map_or_else(|e| e, |_| 0)
-}
-
-// Preserve the original local scalar records for already-installed preview apps.
-pub fn query(op: u8, index: u8, field: u8) -> i32 {
-    let result = match op {
-        0 if index == 0 && field == 0 => Ok(storage::VERSION),
-        1 if index == 0 && field == 0 => refresh(),
-        2 if index == 0 && field == 0 => {
-            table().and_then(|b| storage::partition_count(b).map(|n| n as i32))
-        }
-        3 => table()
-            .and_then(|b| storage::partition(b, index as usize, field))
-            .and_then(|v| i32::try_from(v).map_err(|_| -75)),
-        4 if index < 8 && field == 0 => {
-            if !unsafe { METRICS_READY } {
-                return -95;
-            }
-            i32::try_from(unsafe { METRICS[index as usize] }).map_err(|_| -75)
-        }
-        5 if index < layout::stub_ram().slots() => app_field(index as usize, field),
-        6 if index == 0 => begin_scan(),
-        6 if index == 1 => scan_step(),
-        6 if index == 2 => {
-            close_dir();
-            Ok(0)
-        }
-        7 if (index as usize) < unsafe { FILE_COUNT } => file_field(index as usize, field),
-        _ => Err(-22),
-    };
-    result.unwrap_or_else(|e| e)
-}
-
-// Three bytes per return value preserve UTF-8 bytes without colliding with signed error returns.
-fn chunk(bytes: &[u8], i: usize) -> Result<i32, i32> {
-    let off = i.checked_mul(3).ok_or(-22)?;
-    if off >= bytes.len() {
-        return Err(-22);
-    }
-    let mut out = [0; 4];
-    for j in 0..3 {
-        if off + j < bytes.len() {
-            out[j] = bytes[off + j];
-        }
-    }
-    Ok(i32::from_le_bytes(out))
-}
-fn app_field(slot: usize, field: u8) -> Result<i32, i32> {
-    let a = unsafe { APPS[slot] };
-    match field {
-        0 => Ok(a.valid as i32),
-        1 => i32::try_from(a.version).map_err(|_| -75),
-        10 => Ok(a.icon as i32),
-        2..=9 => chunk(&a.name, (field - 2) as usize),
-        _ => Err(-22),
-    }
-}
-fn file_field(i: usize, field: u8) -> Result<i32, i32> {
-    let f = buffer().files[i];
-    match field {
-        0 => i32::try_from(f.size).map_err(|_| -75),
-        1..=32 => chunk(&f.path, (field - 1) as usize),
-        _ => Err(-22),
-    }
 }

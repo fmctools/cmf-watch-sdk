@@ -167,11 +167,12 @@ pub fn tick() {
         core::slice::from_raw_parts(REQ_PTR.load(Ordering::Relaxed) as *const u8, REQ_LEN.load(Ordering::Relaxed) as usize)
     };
     // Storage runs on ui_service too: forced app stop cannot abort a filesystem operation midway.
-    let result=if let Some((op,index,field))=wp2_core::storage::legacy_request(buf) {
-        crate::storage::query(op,index,field)
-    } else if wp2_core::storage::request(buf).is_some() {
-        crate::storage::execute(unsafe {core::slice::from_raw_parts_mut(REQ_PTR.load(Ordering::Relaxed) as *mut u8,buf.len())})
-    } else {run(buf)};
+    let result = if wp2_core::storage::request(buf).is_some() {
+        // the request lies in the app block (checked in submit): its response space is the app's to overwrite
+        crate::storage::execute(unsafe { core::slice::from_raw_parts_mut(buf.as_ptr() as *mut u8, buf.len()) })
+    } else {
+        run(buf)
+    };
     RESULT.store(result, Ordering::Relaxed);
     STATE.store(DONE, Ordering::Release);
 }

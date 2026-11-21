@@ -15,6 +15,13 @@ pub const FS_TELL: u32 = 0x10107351;
 pub const FS_SYNC: u32 = 0x101073A5;
 pub const FS_UNLINK: u32 = 0x1010764D;
 pub const FS_RENAME: u32 = 0x10107705;
+// Read-only metadata for storage inspection (docs/storage-inspection.md). fs_stat/fs_readdir fill the
+// production dirent: u8 type, name[256], u32 size at +0x104 (not the SDK's enum-sized fs_dirent).
+pub const FS_STAT: u32 = 0x10107DC1;
+pub const FS_STATVFS: u32 = 0x101BF769;
+pub const FS_OPENDIR: u32 = 0x10107D09;
+pub const FS_READDIR: u32 = 0x10107E09;
+pub const FS_CLOSEDIR: u32 = 0x10107AE9;
 
 pub const OS_THREAD_CREATE: u32 = 0x101BE1A3;
 pub const OS_SLEEP: u32 = 0x101BE1ED;

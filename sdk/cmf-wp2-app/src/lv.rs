@@ -10,7 +10,10 @@
 /// Installed-app icon sizes. Native reuses existing validated pixels.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u8)]
-pub enum IconSize { Thumbnail=64, Native=96 }
+pub enum IconSize {
+    Thumbnail = 64,
+    Native = 96,
+}
 
 use core::sync::atomic::{AtomicBool, Ordering};
 
@@ -473,15 +476,6 @@ impl Batch {
         self.put(0x1A, obj.0, &[&[slot, size as u8]])
     }
 
-    /// Compatibility alias for the original local icon API.
-    pub fn app_icon(&mut self, obj: Obj, slot: u8) -> Result<(), LvError> {
-        self.put(0x1A, obj.0, &[&[slot]])
-    }
-    /// Compatibility alias for the original local icon API.
-    pub fn app_icon_native(&mut self, obj: Obj, slot: u8) -> Result<(), LvError> {
-        self.installed_app_icon(obj, slot, IconSize::Native)
-    }
-
     /// Drops the records not submitted yet. Their handles stay taken: use it only for records the loader has
     /// already seen another way (host tests), or not at all.
     pub fn clear(&mut self) {
@@ -507,11 +501,15 @@ mod tests {
     }
 
     #[test]
-    fn installed_icon_aliases_keep_the_preview_wire_format() {
-        let mut b=batch();let o=b.create(Class::Obj,ROOT).unwrap();b.clear();
-        b.app_icon(o,7).unwrap();assert_eq!(b.bytes(),&[0x1A,1,o.0 as u8,0,7]);b.clear();
-        b.app_icon_native(o,7).unwrap();assert_eq!(b.bytes(),&[0x1A,2,o.0 as u8,0,7,96]);b.clear();
-        b.installed_app_icon(o,15,IconSize::Thumbnail).unwrap();assert_eq!(b.bytes(),&[0x1A,2,o.0 as u8,0,15,64]);
+    fn installed_icon_wire_format() {
+        let mut b = batch();
+        let o = b.create(Class::Obj, ROOT).unwrap();
+        b.clear();
+        b.installed_app_icon(o, 7, IconSize::Native).unwrap();
+        assert_eq!(b.bytes(), &[0x1A, 2, o.0 as u8, 0, 7, 96]);
+        b.clear();
+        b.installed_app_icon(o, 15, IconSize::Thumbnail).unwrap();
+        assert_eq!(b.bytes(), &[0x1A, 2, o.0 as u8, 0, 15, 64]);
     }
 
     /// One record of every op (CREATE … ANGLES) after the spec's example batch.

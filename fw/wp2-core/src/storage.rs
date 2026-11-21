@@ -2,6 +2,7 @@
 pub const OP: u8 = 0x19;
 pub const VERSION: i32 = 1;
 pub const TABLE_BYTES: usize = 744;
+pub const MAX_PARTITIONS: usize = 30;
 
 /// Standalone storage request: 128-byte payload, op/index/reserved followed by output space.
 pub const PAYLOAD: usize = 128;
@@ -21,7 +22,7 @@ pub fn partition_count(b: &[u8]) -> Result<usize, i32> {
         return Err(-22);
     }
     let n = u16::from_le_bytes([b[8], b[9]]) as usize;
-    if n > 30 {
+    if n > MAX_PARTITIONS {
         return Err(-22);
     }
     let mut crc = !0u32;
@@ -124,14 +125,5 @@ mod tests {
         assert_eq!(partition(&b, 1, 0), Err(-22));
         b[32] ^= 1;
         assert_eq!(partition_count(&b), Err(-5));
-    }
-}
-
-/// Compatibility with the local pre-release scalar storage service. New callers use the typed response.
-pub fn legacy_request(b: &[u8]) -> Option<(u8, u8, u8)> {
-    if b.len() == 8 && b[..4] == [OP, 4, 0, 0] && b[7] == 0 {
-        Some((b[4], b[5], b[6]))
-    } else {
-        None
     }
 }

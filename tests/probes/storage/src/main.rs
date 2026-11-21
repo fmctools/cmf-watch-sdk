@@ -16,7 +16,7 @@ fn main(api:&'static Api)->i32 {
  {
   use cmf_wp2_app::{lv::*,stock};
   let lv=api.lv().unwrap();let mut b=Batch::new().unwrap();stock::font(&mut b).unwrap();b.submit(&lv).unwrap();stock::theme(&mut b).unwrap();
-  for (slot,side,x,y) in [(0,IconSize::Thumbnail,90,180),(8,IconSize::Native,240,164),(15,IconSize::Thumbnail,190,300)] {
+  for (slot,side,x,y) in [(0,IconSize::Thumbnail,90,180),(0,IconSize::Native,240,164),(15,IconSize::Thumbnail,190,300)] {
    let o=b.create(Class::Obj,ROOT).unwrap();b.size(o,side as i32,side as i32).unwrap();
    b.align(o,Align::TopLeft,x,y).unwrap();b.style(o,Prop::BgOpa,0,0).unwrap();
    b.installed_app_icon(o,slot,side).unwrap();

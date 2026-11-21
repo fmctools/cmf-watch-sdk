@@ -48,8 +48,7 @@ background transparent to preserve alpha. No pointers or pixel buffers cross the
 Missing or unloadable icons clear the image background. An app can draw a fallback using its metadata;
 `InstalledApp.has_icon` describes the package descriptor and does not guarantee the menu cache could allocate
 its pixels. Native mode reuses menu pixels; thumbnails are allocated lazily, at most one per menu entry, and
-freed after app LVGL teardown on exit or when the menu entry changes. Native menu icons remain available. Existing pre-release `app_icon` and
-`app_icon_native` methods remain aliases.
+freed after app LVGL teardown on exit or when the menu entry changes. Native menu icons remain available.
 
 ## Lifecycle and budgets
 
@@ -71,8 +70,8 @@ mixed with LVGL commands. The loader range-checks the entire buffer before queui
 
 Storage record: `[0x19, 128, 0, 0]` followed by a 128-byte payload. Payload byte 0 is the operation, bytes 1–2
 are the index (`u16`), byte 3 is zero, and bytes 4–127 are response space. The loader clears response space.
-The function returns 0 on success or a negative error; response bytes are unspecified on error. Unlike the
-older scalar preview, unsigned fields retain all 32 bits.
+The function returns 0 on success or a negative error; response bytes are unspecified on error. Unsigned fields
+keep all 32 bits.
 
 Offsets below are relative to the response space (record byte 8). Unused bytes are zero. Index must be zero
 unless stated otherwise.
@@ -95,13 +94,11 @@ categorization should be based on the listed paths, not inferred from those thre
 
 Icon record: `[0x1A, 2, handle_lo, handle_hi, slot, side]`, side 64 or 96. Normal whole-batch validation
 checks class, handle and slot range 0–15 before any mutation. A slot absent from an eight-slot stub has no
-image. The legacy one-byte payload remains accepted and selects 64px.
+image.
 
 Malformed/unknown commands and indices return -22; unsupported service/backend -95; request contention -16;
 allocation failure -12; invalid/corrupt stock metadata -5; arithmetic overflow -75. Stock filesystem errors
 are propagated. Limit exhaustion is reported through `partial`, not fabricated totals.
 
-The local pre-release eight-byte scalar 0x19 requests remain accepted for installed preview binaries. They
-keep their original signed-value limits and operation meanings. New apps use the typed service above; the
-compatibility form is not the extension mechanism. Future incompatible layouts need a different
-record/versioned request, not a reinterpretation of v1 fields or existing commands.
+Future incompatible layouts need a different record or a new service version, not a reinterpretation of v1
+fields or existing commands.
