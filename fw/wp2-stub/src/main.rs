@@ -21,8 +21,11 @@ pub struct StubHeader {
     applist_layout: extern "C" fn(*mut u8) -> i32,
     /// wgt_reg entry for the free widget id 0x40 (card.rs); was reserved (0) before
     widget: &'static card::WgtReg,
-    /// version 2: replaces `bl WfmPara_Load` in WFManager_Init (wfguard.rs)
-    wf_para_load: extern "C" fn(*mut u8) -> i32,
+    /// version 2: the watch face guard's four hooks (wfguard.rs)
+    wf_boot: extern "C" fn(*mut u8) -> i32,
+    wf_saved: extern "C" fn() -> i32,
+    power_down: extern "C" fn(),
+    forced_reboot: extern "C" fn(),
 }
 
 unsafe impl Sync for StubHeader {}
@@ -38,7 +41,10 @@ static HEADER: StubHeader = StubHeader {
     view_name: b"wp2_view\0".as_ptr(),
     applist_layout: applist::wp2_applist_layout,
     widget: &card::WIDGET,
-    wf_para_load: wfguard::wp2_wf_para_load,
+    wf_boot: wfguard::wp2_wf_boot,
+    wf_saved: wfguard::wp2_wf_saved,
+    power_down: wfguard::wp2_power_down,
+    forced_reboot: wfguard::wp2_forced_reboot,
 };
 
 // Replaces `bl 0x10146AA4` (ResFbHeap init, 4 of its 8 arguments on the stack) at 0x101884FA.

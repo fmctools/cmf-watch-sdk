@@ -21,7 +21,12 @@ if [ "$loader" = 1 ]; then
 fi
 rm -f target/app-wp2.bin
 uv run --locked wp2apps firmware --stub target/wp2-stub.bin --output target/app-wp2.bin
-rm -f target/app-wp3.bin
-uv run --locked wp2apps firmware --model wp3 --stub target/wp3-stub.bin --output target/app-wp3.bin
 echo "$root/target/app-wp2.bin"
-echo "$root/target/app-wp3.bin"
+rm -f target/app-wp3.bin
+# cmf-watch-utils' pinned commit (the release CI) has no 3 Pro image: only that model is left out then
+if [ -f "${CMF_WATCH_UTILS:-$root/../cmf-watch-utils}/dumps/binaries/firmware/JX402_w3pro_V1.0.1.77.bin" ]; then
+    uv run --locked wp2apps firmware --model wp3 --stub target/wp3-stub.bin --output target/app-wp3.bin
+    echo "$root/target/app-wp3.bin"
+else
+    echo "skipped app-wp3.bin: no JX402_w3pro_V1.0.1.77.bin in cmf-watch-utils" >&2
+fi

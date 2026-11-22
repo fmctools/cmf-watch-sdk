@@ -17,8 +17,8 @@ NOR_APP_OFFSET = 0x24000
 NOR_APP_SIZE = 0x34B000
 STUB_MAX = 0x6000  # own budget, the NOR app partition has ~964 KiB after app.bin (docs/recon.md)
 STUB_HEADER = struct.Struct("<4sIIIIIII")
-# header version 2 adds the watch face guard hook (fw/wp2-stub/src/wfguard.rs)
-STUB_HEADER_V2 = struct.Struct("<4sIIIIIIII")
+# header version 2 adds the watch face guard's hooks (fw/wp2-stub/src/wfguard.rs)
+STUB_HEADER_V2 = struct.Struct("<4sIIIIIII4I")
 VIEW_TABLE, VIEW_TABLE_END = 0x100004B8, 0x100013E8
 # 0x101461AC and 0x10055458 hold the same values but bound neighbouring tables (docs/recon.md)
 VIEW_START_LITERALS = (0x1018BC24, 0x1018DF3C)
@@ -30,18 +30,35 @@ PAGE_VIEWS = range(0xF8, 0x108)
 BOOT_CALL = 0x101884FA
 STOCK_HEAP_INIT = 0x10146AA4
 BLE_CALL = 0x100D34F0
-# WFManager_Init calls WfmPara_Load here, once per boot before the active face loads (docs/recon.md)
-WFM_PARA_CALL = 0x100DE068
-STOCK_WFM_PARA_LOAD = 0x100DEB34
+# the watch face guard's hooks in the order of both stub headers
+WF_BOOT, WF_SAVED, POWER_DOWN, FORCED_REBOOT = range(4)
+# (bl site, its stock target, hook), docs/recon.md "Watch face boot guard"
+GUARD_WP2 = (
+    (0x100DE098, 0x101B93B6, WF_BOOT),  # WFManager_Init: the list is final, saved or default
+    (0x100B2264, 0x100DD16C, WF_SAVED),  # the face list editor closes
+    (0x100DD1F6, 0x100DD16C, WF_SAVED),  # WFManager_Load_ByIdx of a picked index
+    (0x100DD42E, 0x100DD16C, WF_SAVED),  # WFManager_SetCurrIdxForUi
+    (0x100DE1E8, 0x100DD16C, WF_SAVED),  # the phone's set, list or upload (WFM PendHandle)
+    (0x10148C9E, 0x1014A8FC, POWER_DOWN),  # system_power_off
+    (0x10148D32, 0x1014A8FC, POWER_DOWN),  # system_power_reboot
+    (0x101CE678, 0x100C6234, FORCED_REBOOT),  # ota force reboot
+)
 STOCK_BLE_READ = 0x100CC284
-# Watch 3 Pro jx402_08 1.0.1.77 (wp2-core wfguard.rs WP3): the stub goes at the end of app.bin, WFManager_Init
-# (0x100D6DAC) calls WfmPara_Load (0x100D7990) once per boot at 0x100D6DF4
+# Watch 3 Pro jx402_08 1.0.1.77 (wp2-core wfguard.rs WP3): the stub goes at the end of app.bin
 WP3_STOCK_SHA256_PREFIX = "815a21fc80aa3941"
 WP3_STUB_OFFSET = 0x2BD280
 WP3_STUB_MAX = 0x1000
-WP3_STUB_HEADER = struct.Struct("<4sII")
-WP3_WFM_PARA_CALL = 0x100D6DF4
-WP3_STOCK_WFM_PARA_LOAD = 0x100D7990
+WP3_STUB_HEADER = struct.Struct("<4sI4I")
+GUARD_WP3 = (
+    (0x100D6E20, 0x101D5A02, WF_BOOT),
+    (0x100A5D84, 0x100D577C, WF_SAVED),
+    (0x100D5804, 0x100D577C, WF_SAVED),
+    (0x100D5A5A, 0x100D577C, WF_SAVED),
+    (0x100D6F78, 0x100D577C, WF_SAVED),
+    (0x10155226, 0x101570C0, POWER_DOWN),
+    (0x101552C8, 0x101570C0, POWER_DOWN),
+    (0x1015533A, 0x100BA94C, FORCED_REBOOT),
+)
 # list style descriptor +0xC: its layout; waterfall (0x101EB184) is not covered
 APPLIST_LAYOUT = 0x101EB160
 STOCK_APPLIST_LAYOUT = 0x1005EEE5
@@ -239,10 +256,9 @@ def patch(app: bytes, stub: bytes | None = None, *, motor: int | None = None, re
 def add_stub(out: bytearray, stub: bytes) -> None:
     version = struct.unpack_from("<I", stub, 4)[0]
     header = STUB_HEADER_V2 if version == 2 else STUB_HEADER
-    magic, version, boot, ble, view_proc, view_name, applist, widget, *rest = header.unpack_from(stub)
-    wf_para = rest[0] if rest else 0
+    magic, version, boot, ble, view_proc, view_name, applist, widget, *guard = header.unpack_from(stub)
     base = APP_VBASE + STUB_OFFSET
-    code = (boot, view_proc) + tuple(p for p in (ble, applist, wf_para) if p)
+    code = (boot, view_proc) + tuple(p for p in (ble, applist) if p) + tuple(guard)
     if (magic != b"WP2S" or version not in (1, 2) or not all(p & 1 for p in code)
             or not all(base <= p & ~1 < base + len(stub) for p in (*code, view_name))):
         raise ValueError("bad stub header")
@@ -274,12 +290,17 @@ def add_stub(out: bytearray, stub: bytes) -> None:
         put(out, APPLIST_LAYOUT, struct.pack("<I", STOCK_APPLIST_LAYOUT), struct.pack("<I", applist))
     if widget:
         put(out, WGT_REG + 4 * WGT_ID, bytes(4), struct.pack("<I", widget))
-    if wf_para:
-        put(out, WFM_PARA_CALL, thumb_bl(WFM_PARA_CALL, STOCK_WFM_PARA_LOAD), thumb_bl(WFM_PARA_CALL, wf_para & ~1))
+    if guard:
+        put_guard(out, GUARD_WP2, guard)
+
+
+def put_guard(out: bytearray, sites: tuple, hooks: list[int]) -> None:
+    for at, stock, hook in sites:
+        put(out, at, thumb_bl(at, stock), thumb_bl(at, hooks[hook] & ~1))
 
 
 def patch_wp3(app: bytes, stub: bytes) -> bytes:
-    """Watch 3 Pro: appends fw/wp3-stub (the boot watch face guard only) and points `bl WfmPara_Load` at it."""
+    """Watch 3 Pro: appends fw/wp3-stub (the watch face guard only) and points the GUARD_WP3 calls at it."""
     if not hashlib.sha256(app).hexdigest().startswith(WP3_STOCK_SHA256_PREFIX):
         raise ValueError("not the stock jx402_08 1.0.1.77 app.bin (sha256 mismatch)")
     out = bytearray(app)
@@ -290,9 +311,9 @@ def patch_wp3(app: bytes, stub: bytes) -> bytes:
 
 
 def add_stub_wp3(out: bytearray, stub: bytes) -> None:
-    magic, version, wf_para = WP3_STUB_HEADER.unpack_from(stub)
+    magic, version, *guard = WP3_STUB_HEADER.unpack_from(stub)
     base = APP_VBASE + WP3_STUB_OFFSET
-    if magic != b"WP3S" or version != 1 or not wf_para & 1 or not base <= wf_para & ~1 < base + len(stub):
+    if magic != b"WP3S" or version != 1 or not all(p & 1 and base <= p & ~1 < base + len(stub) for p in guard):
         raise ValueError("bad stub header")
     if len(stub) > WP3_STUB_MAX:
         raise ValueError(f"stub takes {len(stub):#x} bytes; the limit is {WP3_STUB_MAX:#x}")
@@ -300,8 +321,7 @@ def add_stub_wp3(out: bytearray, stub: bytes) -> None:
         raise ValueError(f"app.bin is {len(out):#x} bytes; the stub goes at {WP3_STUB_OFFSET:#x}")
     out += stub
     out += bytes(-len(out) % 4)
-    put(out, WP3_WFM_PARA_CALL, thumb_bl(WP3_WFM_PARA_CALL, WP3_STOCK_WFM_PARA_LOAD),
-        thumb_bl(WP3_WFM_PARA_CALL, wf_para & ~1))
+    put_guard(out, GUARD_WP3, guard)
 
 
 def changed_ranges(old: bytes, new: bytes, gap: int = 16) -> list[tuple[int, int]]:

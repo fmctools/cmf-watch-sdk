@@ -58,14 +58,19 @@ def cmd_firmware(args):
 
 
 def cmd_ota_image(args):
-    stock, app = paths.stock_app(), args.app.read_bytes()
+    wp3 = args.model == "wp3"
+    name = paths.FIRMWARE_WP3 if wp3 else paths.FIRMWARE
+    stock, app = paths.stock_app_wp3() if wp3 else paths.stock_app(), args.app.read_bytes()
     firmware.check_acth(app)
     if app == stock:
         raise ValueError("the app.bin is stock")
     if len(app) < len(stock):
         raise ValueError("the app.bin is shorter than stock")
+    # the header does not name the board: the code at the stock's reset vector must be this model's
+    if app[0x200:0x400] != stock[0x200:0x400]:
+        raise ValueError(f"the app.bin is not built from {name.name}; check --model")
     with tempfile.TemporaryDirectory() as tmp:
-        built = ota_image(paths.firmware(), app, Path(tmp), args.version_code, temp_only=args.temp_only)
+        built = ota_image(paths.firmware(name), app, Path(tmp), args.version_code, temp_only=args.temp_only)
         if paths.app_from(built) != app:
             raise ValueError("the rebuilt image does not carry this app.bin")
         print(paths.fwkit("verify", built).strip())
@@ -332,6 +337,7 @@ def parser():
     fw.set_defaults(handler=cmd_firmware)
     ota = commands.add_parser("ota-image", help="Full stock firmware image carrying a patched app.bin")
     ota.add_argument("--app", type=Path, required=True)
+    ota.add_argument("--model", choices=("wp2", "wp3"), default="wp2", help="wp3: Watch 3 Pro 1.0.1.77")
     ota.add_argument("--output", type=Path, required=True)
     ota.add_argument("--version-code", type=lambda v: int(v, 0), metavar="N",
                      help="ota.xml version_code (stock 0x10000)")
