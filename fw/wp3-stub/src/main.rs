@@ -13,6 +13,7 @@ pub struct Header {
     wf_saved: extern "C" fn() -> i32,
     power_down: extern "C" fn(),
     forced_reboot: extern "C" fn(),
+    wf_parse: extern "C" fn(*mut u8, *mut u8) -> i32,
 }
 
 #[used]
@@ -24,6 +25,7 @@ pub static HEADER: Header = Header {
     wf_saved: wp3_wf_saved,
     power_down: wp3_power_down,
     forced_reboot: wp3_forced_reboot,
+    wf_parse: wp3_wf_parse,
 };
 
 #[unsafe(no_mangle)]
@@ -32,7 +34,11 @@ pub extern "C" fn wp3_wf_boot(para: *mut u8) -> i32 {
 }
 
 pub extern "C" fn wp3_wf_saved() -> i32 {
-    unsafe { wfguard::list_saved(&WP3, TIMERS) }
+    unsafe { wfguard::list_saved(&WP3) }
+}
+
+pub extern "C" fn wp3_wf_parse(file: *mut u8, out: *mut u8) -> i32 {
+    unsafe { wfguard::parse(&WP3, file, out, TIMERS) }
 }
 
 pub extern "C" fn wp3_power_down() {

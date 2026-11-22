@@ -18,7 +18,7 @@ NOR_APP_SIZE = 0x34B000
 STUB_MAX = 0x6000  # own budget, the NOR app partition has ~964 KiB after app.bin (docs/recon.md)
 STUB_HEADER = struct.Struct("<4sIIIIIII")
 # header version 2 adds the watch face guard's hooks (fw/wp2-stub/src/wfguard.rs)
-STUB_HEADER_V2 = struct.Struct("<4sIIIIIII4I")
+STUB_HEADER_V2 = struct.Struct("<4sIIIIIII5I")
 VIEW_TABLE, VIEW_TABLE_END = 0x100004B8, 0x100013E8
 # 0x101461AC and 0x10055458 hold the same values but bound neighbouring tables (docs/recon.md)
 VIEW_START_LITERALS = (0x1018BC24, 0x1018DF3C)
@@ -31,7 +31,7 @@ BOOT_CALL = 0x101884FA
 STOCK_HEAP_INIT = 0x10146AA4
 BLE_CALL = 0x100D34F0
 # the watch face guard's hooks in the order of both stub headers
-WF_BOOT, WF_SAVED, POWER_DOWN, FORCED_REBOOT = range(4)
+WF_BOOT, WF_SAVED, POWER_DOWN, FORCED_REBOOT, WF_PARSE = range(5)
 # (bl site, its stock target, hook), docs/recon.md "Watch face boot guard"
 GUARD_WP2 = (
     (0x100DE098, 0x101B93B6, WF_BOOT),  # WFManager_Init: the list is final, saved or default
@@ -42,13 +42,14 @@ GUARD_WP2 = (
     (0x10148C9E, 0x1014A8FC, POWER_DOWN),  # system_power_off
     (0x10148D32, 0x1014A8FC, POWER_DOWN),  # system_power_reboot
     (0x101CE678, 0x100C6234, FORCED_REBOOT),  # ota force reboot
+    (0x100DD2A6, 0x100DC3C0, WF_PARSE),  # WFManager_Load_ByIdx parses the active face
 )
 STOCK_BLE_READ = 0x100CC284
 # Watch 3 Pro jx402_08 1.0.1.77 (wp2-core wfguard.rs WP3): the stub goes at the end of app.bin
 WP3_STOCK_SHA256_PREFIX = "815a21fc80aa3941"
 WP3_STUB_OFFSET = 0x2BD280
 WP3_STUB_MAX = 0x1000
-WP3_STUB_HEADER = struct.Struct("<4sI4I")
+WP3_STUB_HEADER = struct.Struct("<4sI5I")
 GUARD_WP3 = (
     (0x100D6E20, 0x101D5A02, WF_BOOT),
     (0x100A5D84, 0x100D577C, WF_SAVED),
@@ -58,6 +59,7 @@ GUARD_WP3 = (
     (0x10155226, 0x101570C0, POWER_DOWN),
     (0x101552C8, 0x101570C0, POWER_DOWN),
     (0x1015533A, 0x100BA94C, FORCED_REBOOT),
+    (0x100D58B2, 0x100D48B4, WF_PARSE),
 )
 # list style descriptor +0xC: its layout; waterfall (0x101EB184) is not covered
 APPLIST_LAYOUT = 0x101EB160

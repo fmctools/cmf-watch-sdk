@@ -8,7 +8,11 @@ pub extern "C" fn wp2_wf_boot(para: *mut u8) -> i32 {
 }
 
 pub extern "C" fn wp2_wf_saved() -> i32 {
-    unsafe { wfguard::list_saved(&WP2, TIMERS) }
+    unsafe { wfguard::list_saved(&WP2) }
+}
+
+pub extern "C" fn wp2_wf_parse(file: *mut u8, out: *mut u8) -> i32 {
+    unsafe { wfguard::parse(&WP2, file, out, TIMERS) }
 }
 
 pub extern "C" fn wp2_power_down() {

@@ -21,7 +21,7 @@ except (FileNotFoundError, ImportError):
 
 def fake_stub(boot=0x1025A0A1, ble=0x1025A0C1, view_proc=0x1025A0E1, view_name=0x1025A100, applist=0, widget=0,
               entry=None, guard=None):
-    """entry: a widget registry entry placed at WIDGET_AT; guard: a header version 2 with those four hooks."""
+    """entry: a widget registry entry placed at WIDGET_AT; guard: a header version 2 with those five hooks."""
     fields = (boot, ble, view_proc, view_name, applist, widget) + (guard or ())
     head = struct.pack(f"<I{len(fields)}I", 2 if guard else 1, *fields)
     stub = bytearray(b"WP2S" + head + bytes(0x100))
@@ -40,7 +40,7 @@ def widget_entry(wid=0x40, callbacks=CALLBACKS):
 
 
 def wp3_stub(hooks):
-    return b"WP3S" + struct.pack("<5I", 1, *hooks) + bytes(0x40)
+    return b"WP3S" + struct.pack("<6I", 1, *hooks) + bytes(0x40)
 
 
 def synthetic_app():
@@ -296,7 +296,7 @@ class FirmwareTest(unittest.TestCase):
                 firmware.patch(STOCK, fake_stub(**bad))
 
     def test_wf_guard_calls_patched(self):
-        hooks = (0x1025A0A1, 0x1025A0C1, 0x1025A0E1, 0x1025A0F1)
+        hooks = (0x1025A0A1, 0x1025A0C1, 0x1025A0E1, 0x1025A0F1, 0x1025A111)
         out = synthetic_app()
         firmware.add_stub(out, fake_stub(guard=hooks))
         v1 = synthetic_app()
@@ -305,7 +305,7 @@ class FirmwareTest(unittest.TestCase):
             o = at - 0x10000000
             self.assertEqual(out[o:o + 4], firmware.thumb_bl(at, hooks[hook] & ~1), hex(at))
             self.assertEqual(v1[o:o + 4], firmware.thumb_bl(at, stock), hex(at))
-        for i in range(4):
+        for i in range(5):
             bad = list(hooks)
             bad[i] &= ~1
             with self.assertRaisesRegex(ValueError, "stub"):
@@ -317,7 +317,7 @@ class FirmwareTest(unittest.TestCase):
             self.assertEqual(STOCK[at - 0x10000000:at - 0x10000000 + 4], firmware.thumb_bl(at, stock), hex(at))
 
     def test_wp3_guard_calls_patched(self):
-        hooks = [0x102BD299, 0x102BD2A1, 0x102BD2A9, 0x102BD2B1]
+        hooks = [0x102BD29D, 0x102BD2A1, 0x102BD2A9, 0x102BD2B1, 0x102BD2B9]
         app = bytearray(firmware.WP3_STUB_OFFSET)
         for at, stock, _ in firmware.GUARD_WP3:
             app[at - 0x10000000:at - 0x10000000 + 4] = firmware.thumb_bl(at, stock)
@@ -330,7 +330,7 @@ class FirmwareTest(unittest.TestCase):
             changed.update(range(o, o + 4))
         self.assertLessEqual({i for i in range(len(app)) if out[i] != app[i]}, changed)
         for bad in (b"WP2S" + wp3_stub(hooks)[4:], wp3_stub([hooks[0] & ~1, *hooks[1:]]),
-                    wp3_stub([*hooks[:3], 0x1025A0C1])):
+                    wp3_stub([*hooks[:4], 0x1025A0C1])):
             with self.assertRaisesRegex(ValueError, "stub"):
                 firmware.add_stub_wp3(bytearray(app), bad)
 
@@ -339,14 +339,14 @@ class FirmwareTest(unittest.TestCase):
         self.assertEqual(len(STOCK_WP3), firmware.WP3_STUB_OFFSET)
         for at, stock, _ in firmware.GUARD_WP3:
             self.assertEqual(STOCK_WP3[at - 0x10000000:at - 0x10000000 + 4], firmware.thumb_bl(at, stock), hex(at))
-        out = firmware.patch_wp3(STOCK_WP3, wp3_stub([0x102BD299] * 4))
+        out = firmware.patch_wp3(STOCK_WP3, wp3_stub([0x102BD29D] * 5))
         firmware.check_acth(out)
         with self.assertRaisesRegex(ValueError, "sha256"):
             firmware.patch_wp3(bytes(firmware.WP3_STUB_OFFSET), b"WP3S")
 
     @skipUnless(STOCK_WP3 is not None, "needs JX402_w3pro_V1.0.1.77.bin")
     def test_wp3_ota_image_round_trip(self):
-        app = firmware.patch_wp3(STOCK_WP3, wp3_stub([0x102BD299] * 4))
+        app = firmware.patch_wp3(STOCK_WP3, wp3_stub([0x102BD29D] * 5))
         with tempfile.TemporaryDirectory() as tmp:
             image = cli.ota_image(paths.firmware(paths.FIRMWARE_WP3), app, Path(tmp))
             self.assertEqual(paths.app_from(image), app)

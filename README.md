@@ -82,7 +82,8 @@ its own instance.
 A frame longer than MTU − 3 goes out as a write with response, and the OS turns it into an ATT long
 write. That's how installs work at the default MTU of 23.
 
-Firmware image for OTA: `make fw-ota`, see [docs/ota.md](docs/ota.md).
+Firmware image for OTA: `make fw-ota`, see [docs/ota.md](docs/ota.md). `make fw-ota-wp3` builds one for the Watch 3
+Pro `1.0.1.77` with only the watch face guard (no loader, no apps; never installed on a watch).
 
 Nothing gets written to a physical watch without the owner's approval.
 
@@ -114,7 +115,8 @@ number. The loader is matched by its build CRC. CI signs in to FMC as a `publish
   `res` edits (strings, scene, a glyph in the roller font). Stock levels
   keep their strength; `--motor PERMILLE` scales every stock vibration instead.
 - Packages live in `/NAND:/wp2apps` on the stock FAT volume.
-- Addresses are valid for JX402 `1.0.0.73` only. Other builds need them re-derived.
+- Addresses are valid for JX402 `1.0.0.73` only, except the watch face guard's, which also exist for the Watch 3
+  Pro `1.0.1.77`. Other builds need them re-derived.
 
 ## License
 

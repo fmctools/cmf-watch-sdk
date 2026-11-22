@@ -1,5 +1,6 @@
 // Watch face guard (docs/recon.md, "Watch face boot guard"). The stub keeps a NAND flag {id, stage, deaths} for the
 // active face from the moment it is picked or booted until it has run for SURVIVED_MS:
+// - "picked" until it is parsed (a pick from the phone with the screen off loads at the next wake);
 // - a boot that finds the flag at "loading" means the face took the watch down while it loaded: fall back now;
 // - at "loaded" (LOADED_MS passed) only the MAX_DEATHS-th death in a row falls back. lv_timers stand still while the
 //   screen is off, so this stage can last until the next wake and one unrelated reset must not cost the user's face;
@@ -41,6 +42,8 @@ pub struct Device {
     pub para_save: u32,
     /// (id) -> the att byte a list entry keeps (wfc header +0x17)
     pub face_att: u32,
+    /// WFManager_Parser(file, &face), as WFManager_Load_ByIdx calls it for a face it has not loaded yet
+    pub parser: u32,
     /// data_storage(type, -1): the type's RAM buffer as a new record of its NOR ring
     pub storage_write: u32,
     pub timer_create: u32,
@@ -68,6 +71,7 @@ pub const WP2: Device = Device {
     para_refresh: 0x101B_93B7,
     para_save: 0x100D_EBC5,
     face_att: 0x100D_C6B1,
+    parser: 0x100D_C3C1,
     storage_write: 0x101B_5A6F,
     timer_create: crate::stock::LV_TIMER_CREATE,
     timer_del: crate::stock::LV_TIMER_DEL,
@@ -90,6 +94,7 @@ pub const WP3: Device = Device {
     para_refresh: 0x101D_5A03,
     para_save: 0x100D_7A25,
     face_att: 0x100D_4C71,
+    parser: 0x100D_48B5,
     storage_write: 0x101D_0ECD,
     timer_create: 0x1014_8E6D,
     timer_del: 0x1014_8F05,
@@ -111,12 +116,20 @@ pub struct Timers {
     pub survived: extern "C" fn(*mut c_void),
 }
 
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Stage {
+    /// made active, not parsed yet
+    Picked,
+    /// parsed less than LOADED_MS ago
+    Loading,
+    Loaded,
+}
+
 /// The flag file.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct Watch {
     pub id: u32,
-    /// LOADED_MS passed since the face was picked or booted
-    pub loaded: bool,
+    pub stage: Stage,
     /// boots in a row that this face did not survive after it had loaded
     pub deaths: u8,
 }
@@ -126,13 +139,14 @@ impl Watch {
 
     pub fn encode(self) -> [u8; 8] {
         let id = self.id.to_le_bytes();
-        [Self::TAG, u8::from(self.loaded), self.deaths, 0, id[0], id[1], id[2], id[3]]
+        [Self::TAG, self.stage as u8, self.deaths, 0, id[0], id[1], id[2], id[3]]
     }
 
     pub fn decode(raw: &[u8]) -> Option<Self> {
         match *raw {
-            [Self::TAG, loaded, deaths, 0, a, b, c, d] => {
-                Some(Self { id: u32::from_le_bytes([a, b, c, d]), loaded: loaded != 0, deaths })
+            [Self::TAG, stage @ 0..=2, deaths, 0, a, b, c, d] => {
+                let stage = [Stage::Picked, Stage::Loading, Stage::Loaded][usize::from(stage)];
+                Some(Self { id: u32::from_le_bytes([a, b, c, d]), stage, deaths })
             }
             _ => None,
         }
@@ -143,9 +157,10 @@ impl Watch {
 /// change to that face was lost with the reset, so `active` is the one from before it.
 pub fn at_boot(flag: Option<Watch>, active: u32) -> Option<Watch> {
     match flag.filter(|w| w.id == active) {
-        None => Some(Watch { id: active, loaded: false, deaths: 0 }),
-        Some(w) if !w.loaded || w.deaths.saturating_add(1) >= MAX_DEATHS => None,
-        Some(w) => Some(Watch { loaded: false, deaths: w.deaths + 1, ..w }),
+        None => Some(Watch { id: active, stage: Stage::Loading, deaths: 0 }),
+        Some(w) if w.stage == Stage::Picked => Some(Watch { stage: Stage::Loading, ..w }),
+        Some(w) if w.stage == Stage::Loading || w.deaths.saturating_add(1) >= MAX_DEATHS => None,
+        Some(w) => Some(Watch { stage: Stage::Loading, deaths: w.deaths + 1, ..w }),
     }
 }
 
@@ -243,7 +258,7 @@ pub unsafe fn boot(dev: &Device, para: *mut u8, timers: Timers) -> i32 {
             call!(dev.para_save, fn(*mut u8) -> i32)(para);
             // to NOR now: the save only fills the RAM copy, and the next reset may be one that skips the flush
             call!(dev.storage_write, fn(u32, i32) -> i32)(STORAGE_SETTINGS, -1);
-            Watch { id, loaded: false, deaths: 0 }
+            Watch { id, stage: Stage::Loading, deaths: 0 }
         }
     };
     arm(dev, watch, timers);
@@ -251,21 +266,34 @@ pub unsafe fn boot(dev: &Device, para: *mut u8, timers: Timers) -> i32 {
 }
 
 /// Replaces `bl` of the stock's "save the list" wrapper at its call sites after boot (ui_service, each before the
-/// load): a newly picked face is under watch before it is parsed. Only a change of the active id arms, a list edit
-/// while the screen is off must not put a running face back to "loading".
+/// load): a newly picked face is under watch before it is parsed. Only a change of the active id counts, a list edit
+/// must not restart the watch of a face that runs.
 ///
 /// # Safety
 /// The addresses in `dev` match the running firmware.
-pub unsafe fn list_saved(dev: &Device, timers: Timers) -> i32 {
+pub unsafe fn list_saved(dev: &Device) -> i32 {
     let para = dev.para as usize as *mut u8;
     let active = |list: *const u8| unsafe { list.add(8).cast::<u32>().read_unaligned() };
     let (id, before) = (active(para), active(dev.para_mirror as usize as *const u8));
     call!(dev.para_save, fn(*mut u8) -> i32)(para);
     // ponytail: new content under the id that is already active is not re-armed, it costs one more fault
     if id != before {
-        arm(dev, Watch { id, loaded: false, deaths: 0 }, timers);
+        write_flag(dev, Watch { id, stage: Stage::Picked, deaths: 0 });
     }
     0
+}
+
+/// Replaces `bl parser` in WFManager_Load_ByIdx: a picked face's watch starts as it is parsed.
+// ponytail: the photo face does not go through the parser, picked it costs one more fault
+///
+/// # Safety
+/// `file` and `out` are the stock's arguments; the addresses in `dev` match the running firmware.
+pub unsafe fn parse(dev: &Device, file: *mut u8, out: *mut u8, timers: Timers) -> i32 {
+    let active = unsafe { (dev.para as usize as *const u8).add(8).cast::<u32>().read_unaligned() };
+    if let Some(watch) = read_flag(dev).filter(|w| w.id == active && w.stage == Stage::Picked) {
+        arm(dev, Watch { stage: Stage::Loading, ..watch }, timers);
+    }
+    call!(dev.parser, fn(*mut u8, *mut u8) -> i32)(file, out)
 }
 
 fn timer_face(timer: *mut c_void) -> u32 {
@@ -278,8 +306,8 @@ fn timer_face(timer: *mut c_void) -> u32 {
 /// `timer` is the lv_timer that runs this callback.
 pub unsafe fn loaded(dev: &Device, timer: *mut c_void) {
     let id = timer_face(timer);
-    if let Some(watch) = read_flag(dev).filter(|w| w.id == id && !w.loaded) {
-        write_flag(dev, Watch { loaded: true, ..watch });
+    if let Some(watch) = read_flag(dev).filter(|w| w.id == id && w.stage == Stage::Loading) {
+        write_flag(dev, Watch { stage: Stage::Loaded, ..watch });
     }
     call!(dev.timer_del, fn(*mut c_void) -> ())(timer);
 }
@@ -289,7 +317,7 @@ pub unsafe fn loaded(dev: &Device, timer: *mut c_void) {
 /// # Safety
 /// `timer` is the lv_timer that runs this callback.
 pub unsafe fn survived(dev: &Device, timer: *mut c_void) {
-    if read_flag(dev).is_some_and(|w| w.id == timer_face(timer)) {
+    if read_flag(dev).is_some_and(|w| w.id == timer_face(timer) && w.stage != Stage::Picked) {
         drop_flag(dev);
     }
     call!(dev.timer_del, fn(*mut c_void) -> ())(timer);
@@ -404,29 +432,36 @@ mod tests {
 
     #[test]
     fn a_death_while_loading_falls_back_at_once() {
-        assert_eq!(at_boot(Some(Watch { id: 0x112, loaded: false, deaths: 0 }), 0x112), None);
+        assert_eq!(at_boot(Some(Watch { id: 0x112, stage: Stage::Loading, deaths: 0 }), 0x112), None);
     }
 
     #[test]
     fn deaths_after_the_load_fall_back_on_the_third() {
         let mut watch = at_boot(None, 0x112).unwrap();
         for deaths in 1..MAX_DEATHS {
-            watch = at_boot(Some(Watch { loaded: true, ..watch }), 0x112).unwrap();
-            assert_eq!(watch, Watch { id: 0x112, loaded: false, deaths });
+            watch = at_boot(Some(Watch { stage: Stage::Loaded, ..watch }), 0x112).unwrap();
+            assert_eq!(watch, Watch { id: 0x112, stage: Stage::Loading, deaths });
         }
-        assert_eq!(at_boot(Some(Watch { loaded: true, ..watch }), 0x112), None);
+        assert_eq!(at_boot(Some(Watch { stage: Stage::Loaded, ..watch }), 0x112), None);
     }
 
     #[test]
     fn a_flag_of_another_face_is_stale() {
         // the change to the bad face was lost with the reset, the watch is back on the face before it
-        let flag = Watch { id: 0x4000_0001, loaded: false, deaths: 2 };
-        assert_eq!(at_boot(Some(flag), 0x112), Some(Watch { id: 0x112, loaded: false, deaths: 0 }));
+        let flag = Watch { id: 0x4000_0001, stage: Stage::Loading, deaths: 2 };
+        assert_eq!(at_boot(Some(flag), 0x112), Some(Watch { id: 0x112, stage: Stage::Loading, deaths: 0 }));
+    }
+
+    #[test]
+    fn a_pick_that_never_loaded_is_no_death() {
+        // picked over BLE with the screen off, reset before the next wake
+        let flag = Watch { id: 0x335, stage: Stage::Picked, deaths: 0 };
+        assert_eq!(at_boot(Some(flag), 0x335), Some(Watch { stage: Stage::Loading, ..flag }));
     }
 
     #[test]
     fn flag_round_trip() {
-        for watch in [Watch { id: 0xFFFF_FFFF, loaded: false, deaths: 0 }, Watch { id: 0x112, loaded: true, deaths: 2 }] {
+        for watch in [Watch { id: 0xFFFF_FFFF, stage: Stage::Loading, deaths: 0 }, Watch { id: 0x112, stage: Stage::Loaded, deaths: 2 }] {
             assert_eq!(Watch::decode(&watch.encode()), Some(watch));
         }
         assert_eq!(Watch::decode(&[]), None);
