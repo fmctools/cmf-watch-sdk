@@ -69,12 +69,12 @@ pub fn parse(c2: u16, payload: &[u8]) -> Result<Request<'_>, Status> {
         (DELETE, 1) => Ok(Request::Delete(slot(payload[0])?)),
         (PING, 1) => Ok(Request::Ping),
         // empty data removes the record; a widget record is the whole file: v1 (64 B) or, stub 9, a well-formed v2
-        // (up to 128 B; icon indices are checked against the package when the card is drawn); a blob up to MSG_MAX
+        // (up to 128 B; an icon the package lacks is left out when the card is drawn); a blob up to MSG_MAX
         (PUSH, n) if n >= 2 && payload[0] < SLOTS => match (payload[1], n - 2) {
             (PUSH_WIDGET, 0) | (PUSH_BLOB, 0..=MSG_MAX) => {
                 Ok(Request::Push { slot: payload[0], kind: payload[1], data: &payload[2..] })
             }
-            (PUSH_WIDGET, _) if crate::widget::card(&payload[2..], crate::widget::ICONS_MAX).is_some() => {
+            (PUSH_WIDGET, _) if crate::widget::card(&payload[2..]).is_some() => {
                 Ok(Request::Push { slot: payload[0], kind: payload[1], data: &payload[2..] })
             }
             _ => Err(Status::BadRequest),

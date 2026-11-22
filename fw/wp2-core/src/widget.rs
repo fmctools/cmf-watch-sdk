@@ -32,16 +32,17 @@ fn field(f: &[u8]) -> bool {
     }
 }
 
-/// What the stub draws for `rec` with `icons` widget icons in the package; None = the package name.
-/// v1 is taken as before (the stub terminates its fields); v2 only when every field is well-formed.
-pub fn card(rec: &[u8], icons: u8) -> Option<Card> {
+/// What the stub draws for `rec`; None = the package name. v1 is taken as before (the stub terminates its fields);
+/// v2 only when every field is well-formed. An icon index is well-formed below `ICONS_MAX`, whatever the package
+/// carries: one it does not have costs that icon, not the card (`icon_at`).
+pub fn card(rec: &[u8]) -> Option<Card> {
     match rec {
         [V2, T_TEXT, f @ ..] => (f.len() == WIDGET_REC && field(&f[..WIDGET_TITLE]) && field(&f[WIDGET_TITLE..]))
             .then_some(Card::Text(2)),
         [V2, T_COLUMNS, n, cols @ ..] => ((1..=COLUMNS_MAX).contains(n)
             && cols.len() == COLUMN * usize::from(*n)
             && cols.chunks_exact(COLUMN).all(|c| {
-                field(&c[..CAPTION]) && field(&c[CAPTION + 1..]) && (c[CAPTION] == NO_ICON || c[CAPTION] < icons)
+                field(&c[..CAPTION]) && field(&c[CAPTION + 1..]) && (c[CAPTION] == NO_ICON || c[CAPTION] < ICONS_MAX)
             }))
         .then_some(Card::Columns(*n)),
         [V2, ..] => None,
@@ -57,11 +58,11 @@ pub fn first_stub(template: u8) -> Option<u32> {
     }
 }
 
-/// The loader takes a WIDGET record from the app (op 0x14): v1 on any stub, v2 only when well-formed (icon indices
-/// checked against the most a package can carry) and drawn by the running stub (`stub` = StubRam::version()).
+/// The loader takes a WIDGET record from the app (op 0x14): v1 on any stub, v2 only when well-formed (`card`) and
+/// drawn by the running stub (`stub` = StubRam::version()).
 pub fn accepts(rec: &[u8], stub: u32) -> bool {
     match rec {
-        [V2, t, ..] => first_stub(*t).is_some_and(|first| stub >= first) && card(rec, ICONS_MAX).is_some(),
+        [V2, t, ..] => first_stub(*t).is_some_and(|first| stub >= first) && card(rec).is_some(),
         _ => rec.len() == WIDGET_REC,
     }
 }
@@ -85,9 +86,10 @@ pub fn trailer_len(count: u8) -> usize {
     TRAILER_HEAD + usize::from(count) * ICON_BYTES
 }
 
-/// Offset of icon `i` from the start of the trailer.
-pub fn icon_at(i: u8) -> usize {
-    TRAILER_HEAD + usize::from(i) * ICON_BYTES
+/// Offset of icon `i` from the start of a trailer of `count` icons (0: no trailer or a bad one). None = the column
+/// has no icon: `NO_ICON`, or one the package lacks. The only way to an offset, so nothing is read past the trailer.
+pub fn icon_at(i: u8, count: u8) -> Option<usize> {
+    (i < count).then(|| TRAILER_HEAD + usize::from(i) * ICON_BYTES)
 }
 
 #[cfg(test)]
@@ -109,26 +111,26 @@ mod tests {
 
     #[test]
     fn v1_unchanged() {
-        assert_eq!(card(&[b'a'; 64], 0), Some(Card::Text(0)), "v1: the stub terminates its fields");
-        assert_eq!(card(&[0; 64], 0), Some(Card::Text(0)));
-        assert_eq!(card(&[b'a'; 63], 0), None);
-        assert_eq!(card(&[b'a'; 65], 0), None);
+        assert_eq!(card(&[b'a'; 64]), Some(Card::Text(0)), "v1: the stub terminates its fields");
+        assert_eq!(card(&[0; 64]), Some(Card::Text(0)));
+        assert_eq!(card(&[b'a'; 63]), None);
+        assert_eq!(card(&[b'a'; 65]), None);
     }
 
     #[test]
     fn columns_valid() {
         let r = columns(&[(b"Now", 0, "-3°".as_bytes()), (b"23:00", 1, b"4"), (b"00:00", NO_ICON, b""), (b"", 2, b"5")]);
         assert_eq!(r.len(), 87);
-        assert_eq!(card(&r, 3), Some(Card::Columns(4)));
-        assert_eq!(card(&r[..3 + COLUMN * 1], 3), None, "n says 4, one column follows");
+        assert_eq!(card(&r), Some(Card::Columns(4)));
+        assert_eq!(card(&r[..3 + COLUMN * 1]), None, "n says 4, one column follows");
         let one = columns(&[(b"Now", NO_ICON, b"1")]);
-        assert_eq!(card(&one, 0), Some(Card::Columns(1)), "no icon needs no trailer");
+        assert_eq!(card(&one), Some(Card::Columns(1)), "no icon needs no trailer");
     }
 
     #[test]
     fn every_malformed_record_falls_back() {
         let good = columns(&[(b"Now", 0, b"1"), (b"01", 1, b"2")]);
-        assert!(card(&good, 2).is_some());
+        assert!(card(&good).is_some());
         let mut bad: Vec<Vec<u8>> = vec![
             vec![],
             vec![V2],
@@ -149,7 +151,7 @@ mod tests {
             bad.push(r);
         }
         let mut icon = good.clone();
-        icon[3 + CAPTION] = 2; // index = count
+        icon[3 + CAPTION] = ICONS_MAX; // no package has it
         bad.push(icon);
         let mut text = vec![V2, T_TEXT];
         text.extend_from_slice(&[b'a'; 64]);
@@ -157,10 +159,10 @@ mod tests {
         text[2 + 23] = 0;
         bad.push(text.clone()); // no NUL in the value
         text[2 + 63] = 0;
-        assert_eq!(card(&text, 0), Some(Card::Text(2)));
+        assert_eq!(card(&text), Some(Card::Text(2)));
         bad.push(text[..65].to_vec());
         for r in &bad {
-            assert_eq!(card(r, 2), None, "{r:02x?}");
+            assert_eq!(card(r), None, "{r:02x?}");
         }
     }
 
@@ -168,11 +170,34 @@ mod tests {
     fn sdk_records_pass() {
         let c = |caption, icon, value| cmf_wp2_app::Column { caption, icon, value };
         let (r, n) = cmf_wp2_app::columns_record(&[c("Now", Some(0), "-3°"), c("23:00", Some(2), "4°")]).unwrap();
-        assert_eq!(card(&r[..n], 3), Some(Card::Columns(2)));
-        assert_eq!(card(&r[..n], 2), None, "icon 2 of a package with 2");
+        assert_eq!(card(&r[..n]), Some(Card::Columns(2)));
         assert!(accepts(&r[..n], 9));
         let v1 = cmf_wp2_app::widget_record("Hello", "x");
-        assert_eq!(card(&v1[4..], 0), Some(Card::Text(0)));
+        assert_eq!(card(&v1[4..]), Some(Card::Text(0)));
+    }
+
+    #[test]
+    fn missing_icon_keeps_the_card() {
+        // stub 9, owner 2026-11-22: a package stored stripped on stub 8 still shows its columns after the OTA
+        let r = columns(&[(b"Now", 0, b"1"), (b"01", 2, b"2"), (b"02", 15, b"3")]);
+        assert_eq!(card(&r), Some(Card::Columns(3)), "the card whatever the package carries");
+        for i in [0, 2, 15] {
+            assert_eq!(icon_at(i, 0), None, "no trailer, or a damaged one: count 0");
+        }
+        assert!(icon_at(0, 1).is_some());
+        assert_eq!((icon_at(2, 1), icon_at(15, 1)), (None, None), "count 1, below the indices 2 and 15");
+        for count in 0..=ICONS_MAX {
+            for i in 0..=255 {
+                match icon_at(i, count) {
+                    Some(at) => assert!(i < count && at + ICON_BYTES <= trailer_len(count), "inside the trailer"),
+                    None => assert!(i >= count),
+                }
+            }
+        }
+        for index in [16, 17, 0x80, 254] {
+            let r = columns(&[(b"Now", index, b"1")]);
+            assert_eq!(card(&r), None, "index {index} is malformed whatever the package has");
+        }
     }
 
     #[test]
@@ -195,7 +220,7 @@ mod tests {
         h[8..].copy_from_slice(&crc32(0, &px).to_le_bytes());
         assert_eq!(trailer_head(&h), Some((2, crc32(0, &px))));
         assert_eq!(trailer_len(2), 12 + 9600);
-        assert_eq!(icon_at(1), 12 + 4800);
+        assert_eq!(icon_at(1, 2), Some(12 + 4800));
         for (i, v) in [(0, b'X'), (4, 2), (5, 0), (5, 17), (6, 48), (7, 1)] {
             let mut b = h;
             b[i] = v;

@@ -33,6 +33,7 @@ TRACE_OFF = 0x44
 LOADER_BLOCK_OFF = 0x4E8
 APP_BLOCK_OFF = 0x4F0
 ALLOC_LIMIT_OFF = 0x4F8
+NOR = 0x11000000  # the emulator's NOR; XIP at 0x10000000 is an alias of its app partition
 GUEST_CLOCK = 0x40004118  # low 26 bits: QEMU_CLOCK_VIRTUAL in 125 ms steps (ats3089c.c acts_read)
 WALK = "tour1"  # names the walk in cache keys; bump when walk() changes
 PARALLEL = 3  # stock control walks at once during heavy-face selection
@@ -586,6 +587,20 @@ def reboot(emu: Emu, port: int):
             pass  # the reply may die with the link
 
     asyncio.run(wp2.with_watch(type("Args", (), {"hci_port": port, "address": None})(), at_reboot))
+    wait_boot(emu, boots)
+
+
+def swap_app(emu: Emu, app: bytes):
+    """Another app.bin into the running guest's NOR and a machine reset before it runs an instruction of it: what an
+    update leaves, the same NOR data and NAND under a new firmware (the emulator keeps both over a reset; no OTA)."""
+    boots = emu.uart().count("*** Booting Zephyr")
+    data = emu.run / "swap-app.bin"
+    data.write_bytes(app.ljust(firmware.NOR_APP_SIZE, b"\xff"))
+    emu.gdb(f"restore {data} binary {NOR + firmware.NOR_APP_OFFSET:#x}", "monitor system_reset")
+    wait_boot(emu, boots)
+
+
+def wait_boot(emu: Emu, boots: int):
     end = time.monotonic() + 120
     while (uart := emu.uart()).count("*** Booting Zephyr") == boots or "launcher enter" not in uart[uart.rfind("*** Booting Zephyr"):]:
         if time.monotonic() > end:

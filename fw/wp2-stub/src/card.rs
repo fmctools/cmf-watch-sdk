@@ -10,7 +10,7 @@ use wp2_core::heap::{self, RES};
 use wp2_core::layout::{slot_path, stub_ram, widget_path, WIDGET_REC, WIDGET_TITLE};
 use wp2_core::pkg::{file_size, parse_header, HEADER_SIZE};
 use wp2_core::widget::{
-    card, icon_at, trailer_head, Card, CAPTION, COLUMN, COLUMNS_AT, ICON_SIDE, NO_ICON, REC_MAX, TRAILER_HEAD,
+    card, icon_at, trailer_head, Card, CAPTION, COLUMN, COLUMNS_AT, ICON_SIDE, REC_MAX, TRAILER_HEAD,
 };
 
 use crate::applist::{icon_block, image_block, ImgDsc, ICON};
@@ -232,8 +232,8 @@ extern "C" fn create(ctx: *mut Ctx) -> i32 {
     }
     let mut rec = [0u8; REC_MAX + 1];
     let n = read_upto(&widget_path(slot), &mut rec);
-    match card(&rec[..n], icons) {
-        Some(Card::Columns(k)) => columns(s, ctx.obj, &mut rec, k, &pkg, trailer),
+    match card(&rec[..n]) {
+        Some(Card::Columns(k)) => columns(s, ctx.obj, &mut rec, k, &pkg, trailer, icons),
         Some(Card::Text(at)) => {
             rec[at + WIDGET_TITLE - 1] = 0; // v1 fields are not checked: as before stub 9
             rec[at + WIDGET_REC] = 0;
@@ -262,7 +262,8 @@ fn text(s: &mut State, obj: Obj, rec: &[u8]) {
 /// caption in font24L at y 18 (80×36), the 40 px icon centred on the tile, the value in font24M at y 116, all white.
 /// Fewer than 4 columns share the 320 px evenly. `°` (C2 B0) is drawn as `º` (C2 BA): the stock fonts have only that
 /// one, and 97 writes its temperatures with it (emulator).
-fn columns(s: &mut State, obj: Obj, rec: &mut [u8], k: u8, pkg: &[u8], trailer: u32) {
+#[allow(clippy::too_many_arguments)]
+fn columns(s: &mut State, obj: Obj, rec: &mut [u8], k: u8, pkg: &[u8], trailer: u32, icons: u8) {
     for i in 1..rec.len() {
         if rec[i - 1] == 0xC2 && rec[i] == 0xB0 {
             rec[i] = 0xBA;
@@ -275,9 +276,9 @@ fn columns(s: &mut State, obj: Obj, rec: &mut [u8], k: u8, pkg: &[u8], trailer: 
         let col = &rec[COLUMNS_AT + i * COLUMN..];
         let x = 20 + i as i32 * stride;
         s.objs[3 * i] = label(obj, caption, col.as_ptr(), WHITE, x, 18, stride, 36);
-        let icon = col[CAPTION];
-        if icon != NO_ICON {
-            let at = trailer + icon_at(icon) as u32;
+        // none asked for, or one the package lacks (stored stripped, a bad trailer, fewer icons): just no icon
+        if let Some(at) = icon_at(col[CAPTION], icons) {
+            let at = trailer + at as u32;
             if let Some((block, dsc)) = image_block(ICON_SIDE.into(), |px| read_at(pkg, at, px)) {
                 s.blocks[i] = block;
                 s.objs[3 * i + 1] = image(obj, dsc, x, (H - i32::from(ICON_SIDE)) / 2, ICON_SIDE.into());
