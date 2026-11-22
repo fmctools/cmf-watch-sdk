@@ -37,7 +37,8 @@ const VIMG_CREATE: u32 = 0x1005A015;
 const VIMG_SET_SRC: u32 = 0x1005A02D;
 const FONT_OPEN: u32 = 0x10185C31;
 const FONT_CLOSE: u32 = 0x10185D3D;
-/// the stock widgets' font open (0x100DF9A0): FONT_OPEN, then line_height + 4 for font24M (docs/recon.md)
+/// the stock widgets' font open (0x100DF9A0): FONT_OPEN, then line_height + 4 if the path *pointer* is the stock's
+/// font24M string (docs/recon.md)
 const STOCK_FONT_OPEN: u32 = 0x100DF9A1;
 
 const STYLE_BG_COLOR: u32 = 0x20;
@@ -58,9 +59,10 @@ const GREY: u32 = 0x9CF3;
 const USER_DATA: usize = 0x10;
 const OPEN_VIEW: u32 = 0x101898BD;
 const FONT_PATH: &[u8] = b"/NAND:A/font32M.font\0";
-/// stock widget 97's caption and value fonts; font24M has `°` (97 draws `0°` in it)
+/// stock widget 97's caption and value fonts (font24M has `º`, not `°`: `columns`). The value's is the stock's own
+/// string "/NAND:A/font24M.font": STOCK_FONT_OPEN knows the fonts it adjusts by pointer, a copy gets no adjustment
 const CAPTION_FONT: &[u8] = b"/NAND:A/font24L.font\0";
-const VALUE_FONT: &[u8] = b"/NAND:A/font24M.font\0";
+const VALUE_FONT: *const u8 = 0x1020_1D85 as *const u8;
 const TEXT: &[u8] = b"Apps\0";
 const PAD: i32 = (H - ICON as i32) / 2;
 
@@ -134,8 +136,8 @@ fn param(obj: Obj) -> u8 {
 }
 
 /// `open`: FONT_OPEN, or STOCK_FONT_OPEN as the stock widgets (it adds their line spacing to font24M and others)
-fn open_font(s: &mut State, i: usize, open: u32, path: &[u8]) -> *const u32 {
-    s.font_open[i] = (stock!(open, fn(*mut u32, *const u8) -> i32)(s.font[i].as_mut_ptr(), path.as_ptr()) == 0) as u32;
+fn open_font(s: &mut State, i: usize, open: u32, path: *const u8) -> *const u32 {
+    s.font_open[i] = (stock!(open, fn(*mut u32, *const u8) -> i32)(s.font[i].as_mut_ptr(), path) == 0) as u32;
     if s.font_open[i] != 0 { s.font[i].as_ptr() } else { core::ptr::null() }
 }
 
@@ -248,7 +250,7 @@ extern "C" fn create(ctx: *mut Ctx) -> i32 {
 
 /// title (grey) and value (white) in font32M; `rec` is NUL-terminated at WIDGET_TITLE - 1 and, if longer, at WIDGET_REC
 fn text(s: &mut State, obj: Obj, rec: &[u8]) {
-    let font = open_font(s, 0, FONT_OPEN, FONT_PATH);
+    let font = open_font(s, 0, FONT_OPEN, FONT_PATH.as_ptr());
     let line = if font.is_null() { 32 } else { unsafe { *font.add(2) as i32 } }.clamp(1, H);
     s.objs[0] = label(obj, font, rec.as_ptr(), GREY, 24, 24, W - 48, line);
     if rec.len() > WIDGET_TITLE {
@@ -266,7 +268,7 @@ fn columns(s: &mut State, obj: Obj, rec: &mut [u8], k: u8, pkg: &[u8], trailer: 
             rec[i] = 0xBA;
         }
     }
-    let caption = open_font(s, 0, STOCK_FONT_OPEN, CAPTION_FONT);
+    let caption = open_font(s, 0, STOCK_FONT_OPEN, CAPTION_FONT.as_ptr());
     let value = open_font(s, 1, STOCK_FONT_OPEN, VALUE_FONT);
     let stride = 320 / i32::from(k);
     for i in 0..usize::from(k) {
@@ -287,7 +289,7 @@ fn columns(s: &mut State, obj: Obj, rec: &mut [u8], k: u8, pkg: &[u8], trailer: 
 
 /// param_id 0: the Custom Apps icon and "Apps"
 fn apps(s: &mut State, obj: Obj) {
-    let font = open_font(s, 0, FONT_OPEN, FONT_PATH);
+    let font = open_font(s, 0, FONT_OPEN, FONT_PATH.as_ptr());
     let line = if font.is_null() { 32 } else { unsafe { *font.add(2) as i32 } }.clamp(1, H);
     if let Some((block, dsc)) = icon_block() {
         s.blocks[0] = block;

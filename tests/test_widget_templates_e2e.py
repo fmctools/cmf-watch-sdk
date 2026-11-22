@@ -33,6 +33,13 @@ def icon_box(frame, y0, col, cols=3):
     return crop(frame, y0 + 63, X + 20 + col * (320 // cols), 40, 40)
 
 
+def glyph_rows(frame, y0, y1, x0=79, x1=157):
+    """(first, last) screen row with text in the box"""
+    w, _, rgb = frame
+    rows = [y for y in range(y0, y1) if max(rgb[(y * w + x0) * 3:(y * w + x1) * 3]) > 70]
+    return rows[0], rows[-1]
+
+
 @skipUnless(harness.E2E, "set WP2_E2E=1 (needs the emulator, netsimd, gdb and llvm-nm)")
 class WidgetTemplatesTest(unittest.TestCase):
     def shot(self, emu, name):
@@ -64,6 +71,9 @@ class WidgetTemplatesTest(unittest.TestCase):
             self.assertEqual(harness.read_file(emu, b"/NAND:/wp2apps/0.wgt", 128), rec)
             cols = self.shot(emu, "1-columns")
             self.assertNotEqual(crop(cols, TOP), crop(names, TOP))
+            # where stock widget 97 has them (runs of wgt_reg 97 on the same tile, docs/recon.md)
+            self.assertEqual(glyph_rows(cols, 78, 112), (86, 102), "caption rows as in 97")
+            self.assertEqual(glyph_rows(cols, 174, 216), (184, 200), "value rows as in 97")
             for c in range(3):
                 self.assertGreater(lit(icon_box(cols, TOP, c)), 200, f"icon {c} not drawn")
 
