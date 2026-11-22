@@ -4,6 +4,7 @@ use core::sync::atomic::{AtomicPtr, Ordering};
 
 pub mod lv;
 pub mod stock;
+pub mod storage;
 
 pub const ABI: u16 = 1;
 pub const ABI_MINOR: u16 = 3;

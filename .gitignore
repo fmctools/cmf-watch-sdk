@@ -9,3 +9,5 @@ __pycache__/
 /sdk/target/
 /fw/target/
 .superpowers/
+
+/tests/probes/storage/target/

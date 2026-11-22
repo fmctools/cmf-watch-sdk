@@ -95,7 +95,7 @@ pub fn scan() -> [Option<Entry>; ROWS] {
     let mut out = [None; ROWS];
     for (row, &(e, icon)) in found.iter().enumerate() {
         out[row] = e;
-        lv::set_icon(row, icon);
+        lv::set_icon(row, e.map_or(255, |e| e.slot), icon);
     }
     out
 }
@@ -232,6 +232,9 @@ pub mod lv {
         font_open: bool,
         bar: Obj,
         icons: [*mut u8; ROWS],
+        slots: [u8; ROWS],
+        thumbs: [*mut u8; ROWS],
+        thumb_dsc: [ImgDsc; ROWS],
         dsc: [ImgDsc; ROWS],
         // "Delete?" over the list after a long press, on the screen; NULL when closed
         confirm: Obj,
@@ -254,6 +257,9 @@ pub mod lv {
         font_open: false,
         bar: null_mut(),
         icons: [null_mut(); ROWS],
+        slots: [255; ROWS],
+        thumbs: [null_mut(); ROWS],
+        thumb_dsc: [NO_DSC; ROWS],
         dsc: [NO_DSC; ROWS],
         confirm: null_mut(),
     };
@@ -283,9 +289,63 @@ pub mod lv {
         block
     }
 
-    pub fn set_icon(row: usize, block: *mut u8) {
-        let old = core::mem::replace(&mut ui().icons[row], block);
+    pub fn set_icon(row: usize, slot: u8, block: *mut u8) {
+        let u = ui();
+        unsafe { heap::free(RES, u.thumbs[row]) };
+        (u.thumbs[row], u.thumb_dsc[row], u.slots[row]) = (null_mut(), NO_DSC, slot);
+        let old = core::mem::replace(&mut u.icons[row], block);
         unsafe { heap::free(RES, old) };
+    }
+
+    /// UI thread, app batch (`Batch::installed_app_icon`). The 96px icon is the menu's own descriptor (set in
+    /// `build`); a 64px thumbnail is scaled lazily, one per row, freed in `clear_app_icons` or on rescan.
+    pub fn app_icon(obj: Obj, slot: u8, side: u8) -> Result<(), i32> {
+        const SIDE: u32 = 64;
+        const BYTES: u32 = SIDE * SIDE * 3;
+        const TOTAL: u32 = HEAD as u32 + BYTES;
+        let u = ui();
+        style(obj, LV_STYLE_BG_IMG_SRC, 0, 0);
+        let Some(i) = (0..ROWS).find(|&i| u.slots[i] == slot && !u.icons[i].is_null()) else {
+            return Ok(());
+        };
+        if side == ICON_SIDE as u8 {
+            style(obj, LV_STYLE_BG_IMG_SRC, &u.dsc[i] as *const ImgDsc as u32, 0);
+            return Ok(());
+        }
+        if u.thumbs[i].is_null() {
+            let block = heap::alloc(RES, TOTAL, 0x40);
+            if block.is_null() {
+                return Ok(());
+            }
+            let (src, px) = unsafe { (u.icons[i].add(HEAD), block.add(HEAD)) };
+            let n = ICON_SIDE as usize;
+            for y in 0..SIDE as usize {
+                for x in 0..SIDE as usize {
+                    // nearest neighbour, 3 bytes per pixel (RGB565 + alpha)
+                    let from = ((y * n / SIDE as usize) * n + x * n / SIDE as usize) * 3;
+                    unsafe { core::ptr::copy_nonoverlapping(src.add(from), px.add((y * SIDE as usize + x) * 3), 3) };
+                }
+            }
+            // same block header as read_icon
+            let head = unsafe { core::slice::from_raw_parts_mut(block as *mut u32, HEAD / 4) };
+            head.fill(0);
+            (head[2], head[4], head[5], head[6], head[8]) = (TOTAL, SIDE, SIDE, 3, px as u32);
+            sync_psram(block, TOTAL);
+            u.thumbs[i] = block;
+            u.thumb_dsc[i] = ImgDsc { header: CF_TRUE_COLOR_ALPHA | SIDE << 10 | SIDE << 21, size: BYTES, data: px };
+        }
+        style(obj, LV_STYLE_BG_IMG_SRC, &u.thumb_dsc[i] as *const ImgDsc as u32, 0);
+        Ok(())
+    }
+
+    /// UI thread, after app LVGL objects have been deleted. Menu-native pixels remain intact.
+    pub fn clear_app_icons() {
+        let u = ui();
+        for b in &mut u.thumbs {
+            unsafe { heap::free(RES, *b) };
+            *b = null_mut();
+        }
+        u.thumb_dsc = [NO_DSC; ROWS];
     }
 
     fn style(obj: Obj, prop: u32, value: u32, selector: u32) {
@@ -460,6 +520,8 @@ pub mod lv {
             unsafe { heap::free(RES, *b) };
             *b = null_mut();
         }
+        clear_app_icons();
+        u.slots = [255; ROWS];
         u.dsc = [NO_DSC; ROWS];
         u.cont = null_mut();
         u.bar = null_mut();
