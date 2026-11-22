@@ -6,6 +6,7 @@ import tempfile
 
 ROOT = Path(__file__).resolve().parents[2]
 FIRMWARE = Path("dumps/binaries/firmware/JX402_V1.0.0.73.bin")
+FIRMWARE_WP3 = Path("dumps/binaries/firmware/JX402_w3pro_V1.0.1.77.bin")
 
 
 def cmf_watch_utils() -> Path:
@@ -15,8 +16,8 @@ def cmf_watch_utils() -> Path:
     return path
 
 
-def firmware() -> Path:
-    path = cmf_watch_utils() / FIRMWARE
+def firmware(name: Path = FIRMWARE) -> Path:
+    path = cmf_watch_utils() / name
     if not path.is_file() or path.stat().st_size < 1 << 20:
         raise FileNotFoundError(f"{path} is missing or a Git LFS pointer; run `git lfs pull` in cmf-watch-utils")
     return path
@@ -43,4 +44,11 @@ def stock_app() -> bytes:
     data = app_from(firmware())
     if not hashlib.sha256(data).hexdigest().startswith("30e7978c39d8fb79"):
         raise ValueError("app.bin does not match JX402 1.0.0.73")
+    return data
+
+
+def stock_app_wp3() -> bytes:
+    data = app_from(firmware(FIRMWARE_WP3))
+    if not hashlib.sha256(data).hexdigest().startswith("815a21fc80aa3941"):
+        raise ValueError("app.bin does not match Watch 3 Pro jx402_08 1.0.1.77")
     return data

@@ -20,4 +20,5 @@ pub mod proto;
 pub mod pwm;
 pub mod stock;
 pub mod storage;
+pub mod wfguard;
 pub mod widget;

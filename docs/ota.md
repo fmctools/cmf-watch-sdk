@@ -21,6 +21,14 @@ the motor-only image.
 - `--temp-only` keeps only `ota.xml` and `TEMP.bin` and drops the AGPS trailer. `cmf-watch-utils emu ota` accepts
   only this form. Its `TEMP.bin` is byte-identical to the one in the full image.
 
+## Watch 3 Pro (1.0.1.77)
+
+`make fw-ota-wp3` builds `target/fw-wp3.bin`: the stock `1.0.1.77` image with only the watch face guard
+(`fw/wp3-stub`, docs/recon.md "Watch face boot guard"). No loader, no apps. It needs
+`dumps/binaries/firmware/JX402_w3pro_V1.0.1.77.bin` in cmf-watch-utils; the commit the release workflow pins has
+none, so `scripts/build-fw` leaves the model out there and FMC gets no 3 Pro firmware. Never installed on a watch,
+and the emulator cannot install it either: flash only with the owner's approval.
+
 ## Emulator proof (2026-11-12)
 
 ```bash

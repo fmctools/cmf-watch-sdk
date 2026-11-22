@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["wp2-core", "wp2-stub", "wp2-loader"]
+members = ["wp2-core", "wp2-stub", "wp2-loader", "wp3-stub"]
 
 [workspace.package]
 edition = "2024"

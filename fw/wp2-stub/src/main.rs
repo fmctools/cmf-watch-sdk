@@ -5,6 +5,7 @@ mod applist;
 mod ble;
 mod card;
 mod view;
+mod wfguard;
 
 use core::ffi::c_void;
 use wp2_core::layout::{stub_ram, StubRam};
@@ -20,6 +21,12 @@ pub struct StubHeader {
     applist_layout: extern "C" fn(*mut u8) -> i32,
     /// wgt_reg entry for the free widget id 0x40 (card.rs); was reserved (0) before
     widget: &'static card::WgtReg,
+    /// version 2: the watch face guard's five hooks (wfguard.rs)
+    wf_boot: extern "C" fn(*mut u8) -> i32,
+    wf_saved: extern "C" fn() -> i32,
+    power_down: extern "C" fn(),
+    forced_reboot: extern "C" fn(),
+    wf_parse: extern "C" fn(*mut u8, *mut u8) -> i32,
 }
 
 unsafe impl Sync for StubHeader {}
@@ -28,13 +35,18 @@ unsafe impl Sync for StubHeader {}
 #[used]
 static HEADER: StubHeader = StubHeader {
     magic: *b"WP2S",
-    version: 1,
+    version: 2,
     boot: wp2_boot,
     ble: ble::wp2_ble_default,
     view_proc: view::wp2_view_proc,
     view_name: b"wp2_view\0".as_ptr(),
     applist_layout: applist::wp2_applist_layout,
     widget: &card::WIDGET,
+    wf_boot: wfguard::wp2_wf_boot,
+    wf_saved: wfguard::wp2_wf_saved,
+    power_down: wfguard::wp2_power_down,
+    forced_reboot: wfguard::wp2_forced_reboot,
+    wf_parse: wfguard::wp2_wf_parse,
 };
 
 // Replaces `bl 0x10146AA4` (ResFbHeap init, 4 of its 8 arguments on the stack) at 0x101884FA.

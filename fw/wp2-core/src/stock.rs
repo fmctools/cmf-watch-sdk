@@ -249,3 +249,4 @@ pub const LV_STYLE_BG_IMG_SRC: u32 = 0x28;
 // (indev) -> gesture direction; (indev): wait for release, as the stock popup's gesture close does
 pub const LV_INDEV_GET_GESTURE_DIR: u32 = 0x101C_4F7D;
 pub const LV_INDEV_WAIT_RELEASE: u32 = 0x101C_4FD5;
+// Watch face manager and data_storage: wfguard.rs (Device)
