@@ -813,6 +813,8 @@ Not covered:
   after a load;
 - `AT REBOOT` counts as a death (kept on purpose: it is a way out of a hung face);
 - if NAND does not take the flag there is no guard;
+- four of the nine sites never ran in the e2e, on either model (checked against the stock bytes only): power off and
+  the saves of the list editor, `Load_ByIdx(idx)` and `SetCurrIdxForUi`, so a face picked on the watch itself;
 - an already stuck watch: it needs the patched firmware first;
 - hardware.
 
