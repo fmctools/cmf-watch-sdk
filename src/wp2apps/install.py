@@ -147,11 +147,11 @@ def widget_record(title: str, value: str) -> bytes:
 
 V2, T_TEXT, T_COLUMNS = 0xFF, 0, 1
 NO_ICON = 0xFF
-STUB_V2 = 9  # the first stub that draws v2 records (wp2_core::widget::first_stub)
+STUB_V2 = 10  # the first stub that draws v2 records (wp2_core::widget::first_stub); 9 is the watch face guard
 
 
 def columns_record(columns) -> bytes:
-    """A v2 `columns` widget record (stub 9, docs/widget-push.md), the same bytes as the SDK's
+    """A v2 `columns` widget record (stub 10, docs/widget-push.md), the same bytes as the SDK's
     `Api::widget_columns`: FF 01 n, then per column caption[10] icon:u8 value[10], text UTF-8 cut at a character
     boundary to 9 bytes and NUL-padded. `columns`: 1..4 (caption, icon index or None, value)."""
     if not 1 <= len(columns) <= 4:
@@ -171,6 +171,6 @@ def _field(text: str, size: int) -> bytes:
 
 
 async def push(s, slot: int, kind: int, data: bytes) -> None:
-    """PUSH (stub 8): the app's widget record (v1 64 bytes; stub 9 also v2, up to 128) or start blob (<= 128 bytes);
-    empty data removes it. Send v2 only to stub 9 or later (`stub`): an older one answers BAD_REQUEST."""
+    """PUSH (stub 8): the app's widget record (v1 64 bytes; stub 10 also v2, up to 128) or start blob (<= 128 bytes);
+    empty data removes it. Send v2 only to stub 10 or later (`stub`): an older one answers BAD_REQUEST."""
     await _call(s, PUSH, bytes([slot, kind]) + data)

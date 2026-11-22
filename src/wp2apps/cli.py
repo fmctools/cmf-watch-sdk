@@ -440,7 +440,7 @@ def parser():
         where.add_argument("--hci-port", type=int, help="netsimd H4 TCP port (emulator)")
         where.add_argument("--address", help="BLE address (CoreBluetooth UUID on macOS) of a real watch")
         sub.set_defaults(handler=cmd_cards)
-    widget = commands.add_parser("widget", help="An app's widget card (stub 9 templates, docs/widget-push.md)")
+    widget = commands.add_parser("widget", help="An app's widget card (stub 10 templates, docs/widget-push.md)")
     actions = widget.add_subparsers(dest="action", required=True)
     sub = actions.add_parser("set", help="PUSH a columns card while the app does not run")
     sub.add_argument("slot", type=app_slot_arg)

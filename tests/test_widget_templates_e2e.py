@@ -1,8 +1,8 @@
-"""Stub 9 widget templates (docs/widget-push.md, docs/app-icons.md): widget-columns writes a `columns` card with
+"""Stub 10 widget templates (docs/widget-push.md, docs/app-icons.md): widget-columns writes a `columns` card with
 its own icons through the loader; a host PUSHes one for hello (no icons); malformed records on NAND show the
 package name and nothing faults. An icon the package does not have (no trailer, a corrupt one, fewer icons, a
-package installed on stub 8 and kept over the update) costs that icon, not the card.
-Needs target/app-wp2.bin (stub 9), target/loader.wp2app, widget-columns and hello (scripts/build-app). Frames go
+package installed on stub 8 or 9 and kept over the update) costs that icon, not the card.
+Needs target/app-wp2.bin (stub 10), target/loader.wp2app, widget-columns and hello (scripts/build-app). Frames go
 to runs/widget-templates/."""
 import asyncio
 import json
@@ -18,7 +18,7 @@ from wp2apps import cli as wp2, firmware, install, package, paths
 OUT = paths.ROOT / "runs" / "widget-templates"
 X, W, H = 61, 344, 166
 TOP, BOTTOM = 61, 239
-STUB8 = os.environ.get("WP2_STUB8_APP")  # app.bin built from tag stub-v8, see test_widget_stub8_e2e.py
+OLD_STUBS = {n: p for n in (8, 9) if (p := os.environ.get(f"WP2_STUB{n}_APP"))}  # test_widget_old_stubs_e2e.py
 REC = install.columns_record([("Now", 0, "21°"), ("10:00", 1, "19°"), ("11:00", 2, "-3°")])
 BG = (26, 28, 31)  # the tile, as the emulator frame reads RGB565 0x2966
 
@@ -73,7 +73,7 @@ class WidgetTemplatesTest(unittest.TestCase):
         OUT.mkdir(parents=True, exist_ok=True)
         with harness.installed(["loader", "widget-columns", "hello"], name="widget-templates") as (emu, port):
             cli = lambda *a: harness.cli_out([*a, "--hci-port", port])
-            self.assertIn('"version": 9', cli("list").replace(" ", " "))
+            self.assertEqual(json.loads(cli("list"))["stub"]["version"], 10)
             cli("cards", "set", "widgets:0x40/1,0x40/2")
             harness.ready(emu)
             names = self.shot(emu, "0-names")
@@ -170,18 +170,23 @@ class WidgetTemplatesTest(unittest.TestCase):
             frame = self.shot(emu, "7-count-below-index")
             self.same_card(frame, TOP, whole, (0,), "pixels past the count are not read")
 
-    @skipUnless(STUB8, "set WP2_STUB8_APP (app.bin built from tag stub-v8)")
-    def test_update_from_stub8_keeps_the_card(self):
-        """Installed under stub 8, then the same NOR data and NAND boot with stub 9's app.bin; nothing reinstalled."""
+    @skipUnless(OLD_STUBS, "set WP2_STUB8_APP, WP2_STUB9_APP (older patched app.bin)")
+    def test_update_from_old_stubs_keeps_the_card(self):
+        """Installed under stub 8 or 9, then the same NOR data and NAND boot stub 10's app.bin; nothing reinstalled."""
         OUT.mkdir(parents=True, exist_ok=True)
-        nor = firmware.stage_nor(netsim.paired_nor(), Path(STUB8).read_bytes())
-        with netsim.netsim() as port, harness.Emu("update-stub8", nor=nor, hci_port=port) as emu:
+        for old in OLD_STUBS:
+            with self.subTest(stub=old):
+                self.update_from(old)
+
+    def update_from(self, old):
+        nor = firmware.stage_nor(netsim.paired_nor(), Path(OLD_STUBS[old]).read_bytes())
+        with netsim.netsim() as port, harness.Emu(f"update-stub{old}", nor=nor, hci_port=port) as emu:
             emu.wait_uart("launcher enter", 60)
             emu.keep_awake()
             for name in ("loader", "widget-columns"):
                 harness.cli_out(["install", paths.ROOT / "target" / f"{name}.wp2app", "--hci-port", port])
             harness.cli_out(["cards", "set", "widgets:0x40/1", "--hci-port", port])
-            self.assertEqual(json.loads(harness.cli_out(["list", "--hci-port", port]))["stub"]["version"], 8)
+            self.assertEqual(json.loads(harness.cli_out(["list", "--hci-port", port]))["stub"]["version"], old)
             harness.open_app(emu, 0)
             emu.send("c 1", "c 0", pause=3)
             emu.send("c 1", "c 0", pause=3)
@@ -190,15 +195,15 @@ class WidgetTemplatesTest(unittest.TestCase):
 
             harness.swap_app(emu, (paths.ROOT / "target" / "app-wp2.bin").read_bytes())
             listing = json.loads(harness.cli_out(["list", "--hci-port", port]))
-            self.assertEqual(listing["stub"]["version"], 9)
+            self.assertEqual(listing["stub"]["version"], 10)
             self.assertEqual(listing["slots"]["0"]["name"], "widget-columns", "the same NAND")
             harness.ready(emu)
             self.assertEqual(harness.read_file(emu, b"/NAND:/wp2apps/0.wgt", 128),
-                             install.widget_record("Forecast", "21º"), "the record from stub 8 is still there")
+                             install.widget_record("Forecast", "21º"), "the record from the old stub is still there")
 
             # the phone's PUSH first (it needs no new loader), then the app's own record through the loader
             harness.cli_out(["widget", "set", "0", "--columns", "Now:8:17°", "10:00:9:16°", "--hci-port", port])
-            frame = self.shot(emu, "8-update-pushed")
+            frame = self.shot(emu, f"8-update-from{old}-pushed")
             self.assertGreater(lit(texts(frame, TOP)[304 * 40 * 3:]), 100, "values drawn, not the package name")
             for col in range(2):
                 self.assertEqual(lit(icon_box(frame, TOP, col, 2)), 0, "stored stripped: no icons")
@@ -206,7 +211,7 @@ class WidgetTemplatesTest(unittest.TestCase):
             harness.open_app(emu, 0)
             emu.send("c 1", "c 0", pause=3)
             self.assertEqual(harness.read_file(emu, b"/NAND:/wp2apps/0.wgt", 128), REC)
-            frame = self.shot(emu, "9-update-app")
+            frame = self.shot(emu, f"9-update-from{old}-app")
             self.assertEqual(glyph_rows(frame, 78, 112), (86, 102))
             self.assertEqual(glyph_rows(frame, 174, 216), (184, 200), "values drawn, not the package name")
             for col in range(3):

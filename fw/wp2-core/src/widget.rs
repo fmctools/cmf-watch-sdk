@@ -53,7 +53,7 @@ pub fn card(rec: &[u8]) -> Option<Card> {
 /// The first stub that draws `template`; None = unknown. The loader answers -22 below it so the app falls back.
 pub fn first_stub(template: u8) -> Option<u32> {
     match template {
-        T_TEXT | T_COLUMNS => Some(9),
+        T_TEXT | T_COLUMNS => Some(10), // not 9: that is the watch face guard, without templates
         _ => None,
     }
 }
@@ -171,14 +171,14 @@ mod tests {
         let c = |caption, icon, value| cmf_wp2_app::Column { caption, icon, value };
         let (r, n) = cmf_wp2_app::columns_record(&[c("Now", Some(0), "-3°"), c("23:00", Some(2), "4°")]).unwrap();
         assert_eq!(card(&r[..n]), Some(Card::Columns(2)));
-        assert!(accepts(&r[..n], 9));
+        assert!(accepts(&r[..n], 10));
         let v1 = cmf_wp2_app::widget_record("Hello", "x");
         assert_eq!(card(&v1[4..]), Some(Card::Text(0)));
     }
 
     #[test]
     fn missing_icon_keeps_the_card() {
-        // stub 9, owner 2026-11-22: a package stored stripped on stub 8 still shows its columns after the OTA
+        // stub 10, owner 2026-11-22: a package stored stripped on stub 8 or 9 still shows its columns after the OTA
         let r = columns(&[(b"Now", 0, b"1"), (b"01", 2, b"2"), (b"02", 15, b"3")]);
         assert_eq!(card(&r), Some(Card::Columns(3)), "the card whatever the package carries");
         for i in [0, 2, 15] {
@@ -203,13 +203,18 @@ mod tests {
     #[test]
     fn loader_gate() {
         let r = columns(&[(b"Now", 15, b"1")]);
-        assert!(accepts(&r, 9));
+        assert!(accepts(&r, 10));
+        assert!(accepts(&r, 11), "and every later stub");
+        assert!(!accepts(&r, 9), "stub 9 is the watch face guard: no templates");
+        assert!(!accepts(&[&[V2, T_TEXT][..], &[0; 64]].concat(), 9), "template text neither");
+        assert!(accepts(&[b'a'; 64], 9), "v1 on stub 10");
         assert!(!accepts(&r, 8), "stub 8 does not draw columns");
+        assert_eq!(first_stub(T_COLUMNS), Some(crate::layout::STUB_VERSION), "the stub that brings them");
         assert!(!accepts(&r, 0));
-        assert!(!accepts(&columns(&[(b"Now", 16, b"1")]), 9), "no package has 17 icons");
+        assert!(!accepts(&columns(&[(b"Now", 16, b"1")]), 10), "no package has 17 icons");
         assert!(!accepts(&[V2, 7, 0], 99), "unknown template");
         assert!(accepts(&[b'a'; 64], 0), "v1 on any stub");
-        assert!(!accepts(&[b'a'; 65], 9));
+        assert!(!accepts(&[b'a'; 65], 10));
     }
 
     #[test]

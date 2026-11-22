@@ -474,7 +474,7 @@ fn name(path: &[u8]) -> [u8; 24] {
     raw[8..].try_into().unwrap()
 }
 
-// Re-reads the closed file: CRC of all of it, header checks, size, CRC of image and relocation table. Stub 9: bytes
+// Re-reads the closed file: CRC of all of it, header checks, size, CRC of image and relocation table. Stub 10: bytes
 // after the relocation table are the widget icon trailer (docs/app-icons.md), outside body_crc; a bad one is
 // neutralised (its magic zeroed) and the app still installs, without icons.
 fn verify(ram: &mut StubRam, tmp: &[u8]) -> Status {

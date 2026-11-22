@@ -338,10 +338,10 @@ impl Api {
         (self.lv_submit)(buf.as_ptr(), buf.len())
     }
 
-    /// A `columns` card (stub 9, docs/app-guide.md "Widget"): one to four columns, each a caption, one of the app's
+    /// A `columns` card (stub 10, docs/app-guide.md "Widget"): one to four columns, each a caption, one of the app's
     /// widget icons (`widget-icons/` next to `Cargo.toml`, by index in file name order) and a value, laid out as the
     /// stock weather-by-hour widget. Text over 9 bytes is cut at a char boundary. `0`; `-22` when the watch's stub
-    /// cannot draw it (before stub 9, or a loader up to `loader-2026-11-22-884e9a6`), for 0 or more than 4 columns or
+    /// cannot draw it (before stub 10, or a loader up to `loader-2026-11-22-884e9a6`), for 0 or more than 4 columns or
     /// an icon index over 15: fall back to [`Api::widget`] (with `º`, its font has no `°`). An icon the package lacks
     /// is left out, the card stays. Writes NAND like `widget`.
     pub fn widget_columns(&self, columns: &[Column]) -> i32 {

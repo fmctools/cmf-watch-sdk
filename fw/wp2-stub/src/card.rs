@@ -235,7 +235,7 @@ extern "C" fn create(ctx: *mut Ctx) -> i32 {
     match card(&rec[..n]) {
         Some(Card::Columns(k)) => columns(s, ctx.obj, &mut rec, k, &pkg, trailer, icons),
         Some(Card::Text(at)) => {
-            rec[at + WIDGET_TITLE - 1] = 0; // v1 fields are not checked: as before stub 9
+            rec[at + WIDGET_TITLE - 1] = 0; // v1 fields are not checked: as before stub 10
             rec[at + WIDGET_REC] = 0;
             text(s, ctx.obj, &rec[at..])
         }

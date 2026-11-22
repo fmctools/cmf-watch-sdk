@@ -44,7 +44,7 @@ pub fn data_path(slot: u8, new: bool) -> [u8; 24] {
 }
 
 // the app's widget record (docs/app-guide.md, "Widget"): v1 is WIDGET_REC bytes, title at 0, value at WIDGET_TITLE,
-// each NUL-terminated; stub 9 also draws v2 records of up to widget::REC_MAX bytes (wp2_core::widget); written by the loader for the app, read by the stub when a card with widget 0x40/(slot + 1) is laid out
+// each NUL-terminated; stub 10 also draws v2 records of up to widget::REC_MAX bytes (wp2_core::widget); written by the loader for the app, read by the stub when a card with widget 0x40/(slot + 1) is laid out
 pub fn widget_path(slot: u8) -> [u8; 24] {
     file_path(slot, b"wgt")
 }

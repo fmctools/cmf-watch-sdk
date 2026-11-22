@@ -38,7 +38,7 @@ TRAILER_MAGIC = b"WP2W"
 WIDGET_ICON_SIDE = 40
 WIDGET_ICON_BYTES = WIDGET_ICON_SIDE * WIDGET_ICON_SIDE * 3
 WIDGET_ICONS_MAX = 16
-STUB_TRAILER = 9  # the first stub that takes a package with a trailer (older ones check the exact size)
+STUB_TRAILER = 10  # the first stub that takes a package with a trailer (older ones, 9 too, check the exact size)
 
 
 def widget_trailer(icons: Sequence[bytes]) -> bytes:

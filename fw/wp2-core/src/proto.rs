@@ -68,7 +68,7 @@ pub fn parse(c2: u16, payload: &[u8]) -> Result<Request<'_>, Status> {
         (END, 1) => Ok(Request::End),
         (DELETE, 1) => Ok(Request::Delete(slot(payload[0])?)),
         (PING, 1) => Ok(Request::Ping),
-        // empty data removes the record; a widget record is the whole file: v1 (64 B) or, stub 9, a well-formed v2
+        // empty data removes the record; a widget record is the whole file: v1 (64 B) or, stub 10, a well-formed v2
         // (up to 128 B; an icon the package lacks is left out when the card is drawn); a blob up to MSG_MAX
         (PUSH, n) if n >= 2 && payload[0] < SLOTS => match (payload[1], n - 2) {
             (PUSH_WIDGET, 0) | (PUSH_BLOB, 0..=MSG_MAX) => {
@@ -124,7 +124,7 @@ mod tests {
         assert_eq!(parse(PUSH, &p[..66]), Ok(Request::Push { slot: 15, kind: 0, data: &p[2..66] }));
         assert_eq!(parse(PUSH, &p[..2]), Ok(Request::Push { slot: 15, kind: 0, data: &[] }));
         assert_eq!(parse(PUSH, &p[..65]), Err(Status::BadRequest));
-        // stub 9: a v2 record (up to 128 B) only when well-formed
+        // stub 10: a v2 record (up to 128 B) only when well-formed
         let mut v2 = [0u8; 2 + 3 + 21];
         v2[..5].copy_from_slice(&[15, PUSH_WIDGET, 0xFF, 1, 1]);
         v2[5 + 10] = 0xFF;

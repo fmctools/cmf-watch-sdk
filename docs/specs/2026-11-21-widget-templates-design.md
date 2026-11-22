@@ -110,18 +110,18 @@ limited to the vendor's drawings) and over both at once (later, through the icon
 
 - **App**: `Api::widget_columns(&[Column])` (and `Api::widget_v2(&[u8])` underneath) writes a v2 record through the
   loader. The loader accepts op `0x14` with 64..=128 B; it returns `-22` for a v2 record whose template the running
-  stub does not draw, from a table template → first stub (`00`, `01` → stub 9), so the app falls back to
+  stub does not draw, from a table template → first stub (`00`, `01` → stub 10), so the app falls back to
   `widget(title, value)`, and later templates get the same check. `widget_record` stays.
-- **Phone**: `PUSH` kind `00` takes 64..=128 B from stub 9. A host reads the stub version first (it already does for
+- **Phone**: `PUSH` kind `00` takes 64..=128 B from stub 10. A host reads the stub version first (it already does for
   16 slots) and sends v1 to an older stub.
 - `wp2apps widget set <slot> --columns 'Now:3:-3°' …` for testing from a Mac.
 
 ### Versions
 
-- Stub 9 (OTA), loader of the same date. Docs: `abi-1.4.md` (stub 9 row, record, `PUSH`), `widget-push.md`,
+- Stub 10 (OTA), loader of the same date. Docs: `abi-1.4.md` (stub 10 row, record, `PUSH`), `widget-push.md`,
   `app-guide.md` "Widget", `app-icons.md` (the `WP2W` block).
 
-### Weather (apps repo, after the SDK pin moves to stub 9)
+### Weather (apps repo, after the SDK pin moves to stub 10)
 
 - `columns` with Now and the next three hours: caption `Now` / `HH:00` (as stock 97), the condition icon, the
   temperature with `°`. Ten widget icons (the owner added the two night ones on 2026-11-22): the eight conditions
@@ -138,7 +138,7 @@ The owner's call: the card must not show hours that have passed, so FMC Companio
 - It builds the same `columns` record (Now + the next three hours, same captions, icons by the contract above, `°`)
   from the forecast it already fetches for the `weather` RPC (WeatherKit / Open-Meteo, cached).
 - It finds Weather's slot by package name in the slot list it already reads (Apps tab), and sends `PUSH` kind `00`
-  only to stub 9 or later (it reads the stub version already for 16 slots), never a v1 fallback over the app's own.
+  only to stub 10 or later (it reads the stub version already for 16 slots), never a v1 fallback over the app's own.
 - When: on connect and whenever the first column's hour changes, at most once a minute per the stub's limit; the same
   bytes again are free (`00`, no write). iOS runs in its background wakes (~10 s); a missed hour is caught at the next
   wake or connect.
@@ -148,21 +148,24 @@ The owner's call: the card must not show hours that have passed, so FMC Companio
 
 ## As built (2026-11-21, deviations)
 
+**Stub number.** The templates are stub 10. Stub 9 went to the watch face guard (#24, 2026-11-22): it has no
+templates and takes no trailer, so for hosts and the loader it is an old stub like 8.
+
 On 2026-11-22 the owner saw three deviations listed (the trailer's CRC outside `body_crc`; records up to 128 B with
 short ones allowed; white captions) and said to go on. These three are accepted. Separately the owner approved the
 "Missing icon" deviation below on the same day.
 
 - **Missing icon.** An icon index below 16 that the package does not have (no trailer, a damaged one, fewer icons)
   costs that icon, not the card: the column is drawn with caption and value. The case that asked for it: an app
-  installed on stub 8 is stored stripped and would show only its name after the update to stub 9. An index of
+  installed on stub 8 or 9 is stored stripped and would show only its name after the update to stub 10. An index of
   16..254 is still malformed and shows the package name. Formats, the loader's check and the hosts are unchanged.
 - **Trailer and `body_crc`.** `body_crc` does *not* cover the widget icon trailer: an old loader checks `body_crc`
   over image + relocations and would refuse the app, and a new one would read every icon at each start. The
-  trailer carries its own crc32: `"WP2W" ‖ 1 ‖ count ‖ 40 ‖ 0 ‖ crc32:u32 ‖ pixels` (12-byte head). Stub 9 checks
+  trailer carries its own crc32: `"WP2W" ‖ 1 ‖ count ‖ 40 ‖ 0 ‖ crc32:u32 ‖ pixels` (12-byte head). Stub 10 checks
   it at `END`; a bad one has its magic zeroed and the app still installs and runs, without icons. The card checks
   the head before reading an icon.
-- **Old stubs.** A stub before 9 refuses any package longer than its header says (`Invalid` at `END`); a header flag
-  cannot help (reserved bytes must be 0, the size check stays). So hosts strip the trailer for stub < 9
+- **Old stubs.** A stub before 10 refuses any package longer than its header says (`Invalid` at `END`); a header flag
+  cannot help (reserved bytes must be 0, the size check stays). So hosts strip the trailer for stub < 10
   (`package.strip_trailer`, `wp2apps install`; the companion later): the result is byte for byte the package without
   icons. Old loaders need nothing.
 - **Record length.** `columns` with one or two columns is 24 or 45 bytes, so op `0x14` and `PUSH` kind `00` take any

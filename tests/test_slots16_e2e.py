@@ -53,7 +53,7 @@ class Slots16Test(unittest.TestCase):
                 await install.install(session, (target / "hello.wp2app").read_bytes(), HELLO)
             asyncio.run(cli.with_watch(type("Args", (), {"hci_port": port, "address": None})(), all_apps))
             listing = json.loads(harness.cli_out(["list", "--hci-port", port]))
-            self.assertEqual(listing["stub"]["version"], 9)
+            self.assertEqual(listing["stub"]["version"], 10)
             self.assertEqual({k: v["name"] for k, v in listing["slots"].items() if k != "L"},
                              {**{str(n): f"lab-{n:x}" for n in range(HELLO)}, str(HELLO): "hello"})
             harness.ready(emu)

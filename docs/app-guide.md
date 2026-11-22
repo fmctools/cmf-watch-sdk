@@ -426,14 +426,14 @@ and a white value, on the stock card grey in the system font. The app only store
 api.widget("Vibration Lab", "Strength 35%\nPattern Tick");
 ```
 
-#### Columns card (stub 9)
+#### Columns card (stub 10)
 
-From stub 9 (and the first loader released after `loader-2026-11-22-884e9a6`) the tile can also be a `columns` card in the layout of the stock
+From stub 10 (and the first loader released after `loader-2026-11-22-884e9a6`) the tile can also be a `columns` card in the layout of the stock
 weather-by-hour widget: one to four columns, each a caption, one of the app's own icons and a value.
 
 | Call | Returns |
 |---|---|
-| `widget_columns(&[Column]) -> i32` | `0`, `-5` I/O error, `-22` when the watch cannot draw it (stub before 9, older loader), for 0 or more than 4 columns or an icon over 15 |
+| `widget_columns(&[Column]) -> i32` | `0`, `-5` I/O error, `-22` when the watch cannot draw it (stub before 10, older loader), for 0 or more than 4 columns or an icon over 15 |
 | `widget_v2(rec: &[u8]) -> i32` | the raw v2 record (`docs/widget-push.md`), same codes |
 
 - `Column { caption, icon: Option<u8>, value }`: caption and value up to 9 bytes each, cut at a char boundary. Write

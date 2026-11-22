@@ -1,4 +1,4 @@
-//! A `columns` widget card with the app's own icons (stub 9, docs/app-guide.md "Widget"): Now and the next two hours
+//! A `columns` widget card with the app's own icons (stub 10, docs/app-guide.md "Widget"): Now and the next two hours
 //! of a made-up forecast. The crown shifts the hours; back exits. On an older stub the text card is the fallback.
 #![no_std]
 #![no_main]

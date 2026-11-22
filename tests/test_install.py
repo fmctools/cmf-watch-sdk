@@ -1,3 +1,4 @@
+import contextlib
 import io
 from pathlib import Path
 import struct
@@ -101,9 +102,11 @@ class InstallFlowTest(unittest.IsolatedAsyncioTestCase):
 
 
 class TrailerInstallTest(unittest.IsolatedAsyncioTestCase):
-    async def test_trailer_stripped_before_stub_9(self):
+    async def test_trailer_stripped_before_stub_10(self):
         data = package.pack(bytes(64), name="w", version=1, widget_icons=[bytes(package.WIDGET_ICON_BYTES)])
-        for stub, size in ((8, len(package.strip_trailer(data))), (9, len(data))):
+        plain = package.strip_trailer(data)
+        # 9 is the dangerous one: new enough to look right, but it is the watch face guard, without templates
+        for stub, size in ((8, len(plain)), (9, len(plain)), (10, len(data)), (11, len(data))):
             s = FakeSession(stub=stub)
             await install.install(s, data)
             begin = [p for c, p in s.calls if c == install.BEGIN][0]
@@ -114,6 +117,21 @@ class TrailerInstallTest(unittest.IsolatedAsyncioTestCase):
 # install.columns_record.
 COLUMNS = bytes.fromhex("ff01034e6f7700000000000000002d33c2b000000000000032333a303000000000000134c2b00000000000000030"
                         "303a30300000000000ff2d2d0000000000000000")
+
+
+class WidgetSetTest(unittest.TestCase):
+    def test_no_v2_record_to_stub_9(self):
+        from unittest import mock
+        from wp2apps import cli
+        for stub, sent in ((8, False), (9, False), (10, True)):
+            s = FakeSession(stub=stub)
+
+            async def with_watch(args, action):
+                return await action(s)
+            with mock.patch.object(cli, "with_watch", with_watch), contextlib.redirect_stdout(io.StringIO()), \
+                    contextlib.redirect_stderr(io.StringIO()):
+                code = cli.main(["widget", "set", "0", "--columns", "Now:0:1°", "--hci-port", "1"])
+            self.assertEqual((code == 0, any(c == install.PUSH for c, _ in s.calls)), (sent, sent), f"stub {stub}")
 
 
 class PushTest(unittest.IsolatedAsyncioTestCase):

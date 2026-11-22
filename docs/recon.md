@@ -667,7 +667,7 @@ clears it. The app writes the record with an `lv_submit` WIDGET record (op `0x14
 `Api::widget`); the loader writes the file on the app thread. App removal (BLE `DELETE`, the menu's long press,
 another app installed into the slot) unlinks it. Stub size: `0x2B5F` → `0x2DB3` bytes; with the view table `0x3D00` of `0x4000`.
 
-### Stock widget 97 and the `columns` card (2026-11-21, stub version 9)
+### Stock widget 97 and the `columns` card (2026-11-21, stub version 10)
 
 | Item | Finding | Confidence |
 |---|---|---|

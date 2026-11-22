@@ -18,7 +18,7 @@ Request plaintext: `slot:u8 ‖ kind:u8 ‖ data`
 
 | `kind` | `data` | Stored as |
 |---|---|---|
-| `00` widget | a v1 record (exactly 64 bytes), from stub 9 also a well-formed v2 record (up to 128 bytes), or empty to remove | `/NAND:/wp2apps/<d>.wgt`, the card's record |
+| `00` widget | a v1 record (exactly 64 bytes), from stub 10 also a well-formed v2 record (up to 128 bytes), or empty to remove | `/NAND:/wp2apps/<d>.wgt`, the card's record |
 | `01` blob | 1..128 bytes, or empty to remove | `/NAND:/wp2apps/<d>.psh` |
 
 `slot` is `0..15` (`<d>` its hex digit, `docs/abi-1.4.md`, "16 app slots"). The slot must hold an app package.
@@ -33,7 +33,7 @@ offset 24: value, UTF-8, at most 39 bytes, then 00 up to offset 64; 0A starts a 
 Cut long text at a UTF-8 character boundary. The card shows the title grey, the value white; a line wider than the
 tile ends in `…`. Removing the record shows the package name again.
 
-### v2 records (stub 9)
+### v2 records (stub 10)
 
 A record whose first byte is `FF` (never the start of UTF-8) is v2: `FF ‖ template:u8 ‖ fields`, at most 128 bytes,
 the exact length of its template:
@@ -47,12 +47,12 @@ Text fields are UTF-8, at most 9 (caption, value) or 23/39 (text) bytes, then NU
 indexes the package's widget icons (`docs/app-icons.md`), `FF` = none. In `columns` `°` (C2 B0) is drawn as the
 stock `º` (C2 BA). The text card (v1 and template `00`) is drawn as is and its font has no `°`: send `º` there.
 
-- `PUSH` refuses a malformed v2 record (`BadRequest`); a v2 record to a stub before 9 is `BadRequest` too (it takes
-  exactly 64 bytes): read the stub version first and push v2 only to 9 or later.
+- `PUSH` refuses a malformed v2 record (`BadRequest`); a v2 record to a stub before 10 is `BadRequest` too (it takes
+  exactly 64 bytes): read the stub version first and push v2 only to 10 or later.
 - The stub draws v2 only when the whole record is valid, every icon index being 0..15 or `FF`; anything else (an
   index of 16..254, a template it does not know) shows the package name. The face never depends on the record.
 - A valid index the package does not have is not an error: that column shows caption and value without an icon. So a
-  host may push the same record to an app that was installed without its icons (stored stripped on stub 8).
+  host may push the same record to an app that was installed without its icons (stored stripped on stub 8 or 9).
 - Note: the design said 64..128 B for `PUSH` and op `0x14`; a `columns` record with one or two columns is shorter
   than 64, so both take any length up to 128 and the record's own checks decide.
 
