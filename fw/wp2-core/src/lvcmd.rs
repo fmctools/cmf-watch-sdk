@@ -538,7 +538,7 @@ pub fn focus_shape(d: i32) -> (i32, u32, u32) {
 }
 
 /// WIDGET record (op 0x14, handle 0, payload = the widget record, 1..=128 bytes, docs/app-guide.md "Widget"), alone
-/// in a batch: the loader writes it to the app's N.wgt on the app thread. Before 2026-11-21 the loader took exactly
+/// in a batch: the loader writes it to the app's N.wgt on the app thread. Up to loader-2026-11-22-884e9a6 it took exactly
 /// 64 bytes; on an older loader still op 0x14 is `Malformed`.
 pub fn widget(buf: &[u8]) -> Option<&[u8]> {
     match buf {

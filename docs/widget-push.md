@@ -49,8 +49,10 @@ stock `º` (C2 BA). The text card (v1 and template `00`) is drawn as is and its 
 
 - `PUSH` refuses a malformed v2 record (`BadRequest`); a v2 record to a stub before 9 is `BadRequest` too (it takes
   exactly 64 bytes): read the stub version first and push v2 only to 9 or later.
-- The stub draws v2 only when the whole record is valid, including every icon index below the package's icon count;
-  anything else (and a template it does not know) shows the package name. The face never depends on the record.
+- The stub draws v2 only when the whole record is valid, every icon index being 0..15 or `FF`; anything else (an
+  index of 16..254, a template it does not know) shows the package name. The face never depends on the record.
+- A valid index the package does not have is not an error: that column shows caption and value without an icon. So a
+  host may push the same record to an app that was installed without its icons (stored stripped on stub 8).
 - Note: the design said 64..128 B for `PUSH` and op `0x14`; a `columns` record with one or two columns is shorter
   than 64, so both take any length up to 128 and the record's own checks decide.
 

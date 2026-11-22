@@ -373,12 +373,15 @@ can't be read back. So the stub answers its own release:
   it is held. Same frames, same statuses (`docs/app-guide.md`, install notes).
 - Stub 8: 16 app slots (next section) and `PUSH` (`0x90A8`): the phone sets an app's widget record or start blob
   while it does not run (`docs/widget-push.md`).
-- Stub 9 (loader of 2026-11-21, no ABI bump): widget templates. v2 `.wgt` records (`text`, `columns`), `PUSH` kind
+- Stub 9 (with the first loader released after `loader-2026-11-22-884e9a6`, no ABI bump): widget templates. v2 `.wgt` records (`text`, `columns`), `PUSH` kind
   `00` takes them (up to 128 B), the card draws `columns` with icons from the package's widget icon trailer, and `END`
   accepts a package with that trailer (`docs/widget-push.md`, `docs/app-icons.md`). The loader's op `0x14` takes
   records up to 128 B and answers `-22` for a v2 record whose template the running stub does not draw
   (`wp2_core::widget::first_stub`: `00`, `01` → stub 9) or that is malformed; `Api::widget_columns` /
-  `Api::widget_v2`. Hosts strip the trailer for a stub before 9. Stub 9 is `0x3841` bytes.
+  `Api::widget_v2`; the loaders up to `loader-2026-11-22-884e9a6` answer `-22` to every v2 record. Hosts strip the
+  trailer for a stub before 9. An icon index below 16 that the package lacks leaves that column without an icon and
+  does not cost the card (so a package stored stripped keeps its card over the OTA); 16..254 is malformed. Stub 9 is
+  `0x3815` bytes.
 
 ## 16 app slots (stub 8, loader of 2026-11-19, no ABI bump)
 

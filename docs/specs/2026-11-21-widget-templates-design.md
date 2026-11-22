@@ -77,7 +77,8 @@ limited to the vendor's drawings) and over both at once (later, through the icon
     NUL-padded, cut at a character boundary. `icon` is an index into the package's widget icons, `FF` none.
     Size: 3 + 4 × 21 = 87 B.
 - The stub draws v2 only when it is complete and valid (length, template, `n`, NULs inside each field, icon index
-  within the package's set); otherwise it shows the package name. Unknown templates likewise (a newer app on an older
+  below 16 or `FF`; changed on 2026-11-22 from "within the package's set", see "As built"); otherwise it shows the
+  package name. Unknown templates likewise (a newer app on an older
   v2 stub).
 
 ### Widget icons in the package
@@ -147,6 +148,14 @@ The owner's call: the card must not show hours that have passed, so FMC Companio
 
 ## As built (2026-11-21, deviations)
 
+On 2026-11-22 the owner saw three deviations listed (the trailer's CRC outside `body_crc`; records up to 128 B with
+short ones allowed; white captions) and said to go on. These three are accepted. Separately the owner approved the
+"Missing icon" deviation below on the same day.
+
+- **Missing icon.** An icon index below 16 that the package does not have (no trailer, a damaged one, fewer icons)
+  costs that icon, not the card: the column is drawn with caption and value. The case that asked for it: an app
+  installed on stub 8 is stored stripped and would show only its name after the update to stub 9. An index of
+  16..254 is still malformed and shows the package name. Formats, the loader's check and the hosts are unchanged.
 - **Trailer and `body_crc`.** `body_crc` does *not* cover the widget icon trailer: an old loader checks `body_crc`
   over image + relocations and would refuse the app, and a new one would read every icon at each start. The
   trailer carries its own crc32: `"WP2W" ‖ 1 ‖ count ‖ 40 ‖ 0 ‖ crc32:u32 ‖ pixels` (12-byte head). Stub 9 checks
@@ -160,7 +169,8 @@ The owner's call: the card must not show hours that have passed, so FMC Companio
   length up to 128 and the record's own checks decide (v1 stays exactly 64).
 - **Look.** Captions and values are both white, as in 97 (the stock code sets both to white; the frame reads it
   grey). `°` is drawn as `º` (U+00BA): the stock fonts have only that one, and 97 uses it.
-- **Free RES.** Measured with 16 tiles: no shortage, the icons stay 40 px.
+- **Free RES.** Measured in the emulator with 16 `columns` tiles configured (14 shown): the low-water mark is
+  1.90 MiB free, 2.05 MiB with the same tiles without icons (`docs/app-icons.md`). The icons stay 40 px.
 
 ## Left to the builder
 

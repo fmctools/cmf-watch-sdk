@@ -54,14 +54,19 @@ trailer (a deviation from the design, which had `body_crc` cover it):
   reads the trailer.
 - Stub 9 accepts the extra bytes at `END` and checks the trailer with its own CRC. A bad trailer (head, length or
   CRC) has its magic zeroed: the app still installs and runs, its card just has no icons.
+- A column that names an icon the package does not have (no trailer, a bad one, fewer icons) is drawn with its caption
+  and value and no icon; nothing is read for it (`wp2_core::widget::icon_at`). An app installed on stub 8 is stored
+  stripped, so after the update to stub 9 its card has no icons until the app is installed again.
 - A stub before 9 refuses any package longer than `64 + image + 4·relocs` (`Invalid`). Hosts send such a stub the
   package cut at that length, which is byte for byte the package without icons (`package.strip_trailer`;
   `wp2apps install` does it, the companion must too). Old stubs draw no `columns` cards anyway.
 - The card reads the trailer head at create (one seek), and only the icons the record names, each into its own
   `RES` block (`[64 B][4 800 B][dsc]`, as below), freed with the card. A missing or short read leaves that column
   without an icon.
-- Cost: ≤ 4 × 4 928 B of `RES` per tile while the face's cards exist. Measured with 16 `columns` tiles of 4 icons each
-  (the stock shows 7 cards = 14 tiles): free `RES` never fell below 1.6 MiB (the face alone: 1.6 MiB), no fault.
+- Cost: 4 956 B of `RES` per icon drawn (4 876 B block + allocator). Emulator, one boot, the heap's low-water mark
+  (`HEAP + 0xC`) reset before each of: no app cards 3.53 MiB free; 16 tiles with only names 2.05 MiB; 16 `columns`
+  tiles of 4 icons each 1.90 MiB. The difference of the last two is 158 592 B, 32 icons: the icons of 8 tiles live at
+  once (14 of 16 are shown, the stock has 7 card pages). No cards again: back to 3.53 MiB, no fault.
 
 Building: `widget-icons/NN-name.svg` (40×40 viewBox) next to `Cargo.toml`; `scripts/build-app` renders each with
 `resvg` and calls `wp2apps pack --widget-icons <dir of PNGs>`, indices in file name order. `pack` and `parse` refuse

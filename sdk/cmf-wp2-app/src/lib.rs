@@ -341,8 +341,9 @@ impl Api {
     /// A `columns` card (stub 9, docs/app-guide.md "Widget"): one to four columns, each a caption, one of the app's
     /// widget icons (`widget-icons/` next to `Cargo.toml`, by index in file name order) and a value, laid out as the
     /// stock weather-by-hour widget. Text over 9 bytes is cut at a char boundary. `0`; `-22` when the watch's stub
-    /// cannot draw it (before stub 9, or a loader before 2026-11-21), for 0 or more than 4 columns or an icon index
-    /// over 15: fall back to [`Api::widget`]. Writes NAND like `widget`.
+    /// cannot draw it (before stub 9, or a loader up to `loader-2026-11-22-884e9a6`), for 0 or more than 4 columns or
+    /// an icon index over 15: fall back to [`Api::widget`] (with `º`, its font has no `°`). An icon the package lacks
+    /// is left out, the card stays. Writes NAND like `widget`.
     pub fn widget_columns(&self, columns: &[Column]) -> i32 {
         match columns_record(columns) {
             Some((rec, n)) => self.widget_v2(&rec[..n]),

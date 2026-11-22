@@ -428,7 +428,7 @@ api.widget("Vibration Lab", "Strength 35%\nPattern Tick");
 
 #### Columns card (stub 9)
 
-From stub 9 (and the loader of 2026-11-21) the tile can also be a `columns` card in the layout of the stock
+From stub 9 (and the first loader released after `loader-2026-11-22-884e9a6`) the tile can also be a `columns` card in the layout of the stock
 weather-by-hour widget: one to four columns, each a caption, one of the app's own icons and a value.
 
 | Call | Returns |
@@ -440,7 +440,8 @@ weather-by-hour widget: one to four columns, each a caption, one of the app's ow
   `°` as usual: the stock fonts have only `º` (U+00BA), and the stub draws `°` as that, as the stock widget does.
 - Icons: 40×40 SVGs in `widget-icons/` next to `Cargo.toml` (`00-sun.svg`, `01-cloud.svg`, …); the index is the
   position in file name order. `scripts/build-app` renders them into the package's widget icon trailer
-  (`docs/app-icons.md`). An index the package does not have makes the whole card fall back to the package name.
+  (`docs/app-icons.md`). An index (0..15) the package does not have leaves that column without an icon; the card
+  still shows caption and value, so keep them readable alone.
 - On `-22`, fall back to `widget(title, value)`. **Write `º` (U+00BA) there, not `°`:** the text card is drawn as
   is, on every stub, and its font has no `°` (an emulator frame on stub 8 showed `21°` as `21`):
 

@@ -672,10 +672,10 @@ another app installed into the slot) unlinks it. Stub size: `0x2B5F` → `0x2DB3
 | Item | Finding | Confidence |
 |---|---|---|
 | Entry 97 | `wgt_reg` `0x101F1310`: class 3, state `0xD8`, tap `0x5A` (weather), delete `0x101B302B`, create `0x100AC7ED`, update `0x100ACB21`, reload `0x100ACA95` | high (static) |
-| Layout | create: four columns, x = 20 + 80·i; caption `lv_label` 80×36, `font24L`, white, align top-left (x, 18); image `lv_img` aligned left-mid (x, 0); value label content width × 44, `font24M`, white, top-left (x, 116). Fonts through `0x100DF9A0` (`lvgl_bitmap_font_open`, then `line_height + 4` for `font24M`/`font32R`, `+ 6` for `font32M`/`font28M`, an emoji fallback for `sans32`) | high (decompile) |
+| Layout | create: four columns, x = 20 + 80·i; caption `lv_label` 80×36, `font24L`, white, align top-left (x, 18); image `lv_img` aligned left-mid (x, 0); value label content width × 44, `font24M`, white, top-left (x, 116). Fonts through `0x100DF9A0` (`lvgl_bitmap_font_open`, then `line_height + 4` for `font24M`/`font32R`, `+ 6` for `font32M`/`font28M`, an emoji fallback for `sans32`). It picks these by the path **pointer**, not the text: only the stock strings (`font24M` at `0x10201D85`) get them; with a copy of the path the values sat 4 px high. Glyph rows of a 97 frame and of ours: caption 86..102, value 184..200 (top tile) | high (decompile) |
 | Icon size | gdb on `lv_img_set_src` from create: dsc header `0x0500A005`, 4 800 B: **40×40 CF 5** ("No Data", code `0x1B`, in the emulator) | high (emulator) |
 | Degree sign | the value is `"%d%s"` with a resource string `C2 BA` (`º`, U+00BA), not `°` (U+00B0): `font24M` has no `°` (an emulator frame with `21°` drew `21`), `º` renders as the stock `0º` | high (emulator) |
-| Free `RES` | 16 `columns` tiles of 4 icons each from 16 slots (`runs/res16/`, not committed): free `RES` 1.6..2.8 MiB on every card, as with the face alone; the 8th card is not shown (the stock shows up to 7 cards) | high (emulator) |
+| Free `RES` | 16 `columns` tiles of 4 icons each from 16 slots (`runs/res16/`, not committed): low-water mark (`HEAP + 0xC`, reset per window) 1.90 MiB free, the same tiles without icons 2.05 MiB, no app cards 3.53 MiB; 158 592 B = 32 icon blocks live at once; the 8th card is not shown (the stock shows up to 7 cards) | high (emulator) |
 
 ### App pages and the Apps menu (2026-11-15, stub version 5)
 
