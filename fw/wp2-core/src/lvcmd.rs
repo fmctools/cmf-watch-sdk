@@ -111,6 +111,7 @@ pub enum Rec<'a> {
     Angles { h: u16, start: u16, end: u16, rot: u16 },
     Focus { h: u16, icon: u16 },
     LongMode { h: u16, mode: u8 },
+    AppIcon { h: u16, slot: u8, side: u8 },
 }
 
 /// Handle table: class per handle (`0xFF` = free; 0 is the root, class Obj) and the parent
@@ -255,6 +256,10 @@ fn decode<'a>(buf: &mut &'a [u8]) -> Result<Rec<'a>, Error> {
         0x11 => {
             need(2)?;
             Rec::Focus { h, icon: u16le(p) }
+        }
+        0x1A => {
+            need(2)?;
+            Rec::AppIcon { h, slot: p[0], side: p[1] }
         }
         0x12 => {
             need(1)?;
@@ -426,6 +431,10 @@ fn check(t: &Table, fonts: &mut u8, r: &Rec) -> Result<(), Error> {
                 return Err(Error::BadClass);
             }
             bad(icon > 466 && icon != FOCUS_CARDS)?;
+        }
+        Rec::AppIcon { h, slot, side } => {
+            want(t, h, &[Class::Obj])?;
+            bad(slot >= crate::layout::SLOTS || !matches!(side, 64 | 96))?;
         }
         Rec::LongMode { h, mode } => {
             want(t, h, &[Class::Label])?;
@@ -684,6 +693,22 @@ mod tests {
         v.extend_from_slice(&h.to_le_bytes());
         v.extend_from_slice(p);
         v
+    }
+    #[test]
+    fn installed_icon_records() {
+        let native = [0x1A, 2, 1, 0, 3, 96];
+        assert!(matches!(decode(&mut &native[..]), Ok(Rec::AppIcon { h: 1, slot: 3, side: 96 })));
+        let short = [0x1A, 1, 1, 0, 3];
+        assert!(decode(&mut &short[..]).is_err());
+    }
+    #[test]
+    fn installed_icon_validation() {
+        assert_eq!(check(&[create(1, 0, 0), r(0x1A, 1, &[15, 96])]), Ok(()));
+        assert_eq!(check(&[create(1, 0, 0), r(0x1A, 1, &[0, 64])]), Ok(()));
+        assert_eq!(check(&[create(1, 0, 0), r(0x1A, 1, &[16, 96])]), Err(Error::BadValue));
+        assert_eq!(check(&[create(1, 0, 0), r(0x1A, 1, &[0, 65])]), Err(Error::BadValue));
+        assert_eq!(check(&[create(1, 1, 0), r(0x1A, 1, &[0, 96])]), Err(Error::BadClass));
+        assert_eq!(check(&[r(0x1A, 1, &[0, 96])]), Err(Error::BadHandle));
     }
     fn create(h: u16, class: u8, parent: u16) -> Vec<u8> {
         let mut p = vec![class];
