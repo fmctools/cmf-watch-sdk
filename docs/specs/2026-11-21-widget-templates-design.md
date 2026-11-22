@@ -122,12 +122,14 @@ limited to the vendor's drawings) and over both at once (later, through the icon
 
 ### Weather (apps repo, after the SDK pin moves to stub 9)
 
-- `columns` with Now and the next three hours: caption `Now` / `HH`, the condition icon, the temperature with `°`.
-  Eight widget icons for its eight conditions (`model::Icon`), drawn in the stock weather style, our own drawings.
+- `columns` with Now and the next three hours: caption `Now` / `HH:00` (as stock 97), the condition icon, the
+  temperature with `°`. Ten widget icons (the owner added the two night ones on 2026-11-22): the eight conditions
+  (`model::Icon`), clear at night and partly cloudy at night, drawn in the stock weather style, our own drawings.
+  Now takes the night bit of the hourly entry that contains now.
   Fallback to today's text card on an older stub. The pin bump is its own PR (`sdk-update` skill).
-- The icon order is a contract between the Weather package and the phone: index = `model::Icon` order (clear,
-  partly, cloud, fog, drizzle, rain, snow, storm, as the WMO groups of the weather spec), written in the app's README
-  and in the companion's docs.
+- The icon order is a contract between the Weather package and the phone: indices 0..7 = `model::Icon` order (clear,
+  partly, cloud, fog, drizzle, rain, snow, storm, as the WMO groups of the weather spec), 8 = clear at night,
+  9 = partly cloudy at night; written in the app's README and in the companion's docs.
 
 ### The phone keeps the Weather card fresh (companion repo, iOS and Android)
 
