@@ -15,6 +15,9 @@ const RAIN: u8 = 2;
 const HOURS: [(&str, u8, &str); 6] =
     [("09:00", SUN, "21°"), ("10:00", CLOUD, "19°"), ("11:00", RAIN, "-3°"), ("12:00", SUN, "24°"), ("13:00", CLOUD, "18°"), ("14:00", RAIN, "15°")];
 
+/// the same values for the text card: its font has only `º` (U+00BA) and the stub replaces `°` in `columns` alone
+const TEXT: [&str; 6] = ["21º", "19º", "-3º", "24º", "18º", "15º"];
+
 fn card(api: &Api, at: usize) -> i32 {
     let col = |i: usize, caption| {
         let (_, icon, value) = HOURS[(at + i) % HOURS.len()];
@@ -22,7 +25,7 @@ fn card(api: &Api, at: usize) -> i32 {
     };
     let rc = api.widget_columns(&[col(0, "Now"), col(1, HOURS[(at + 1) % HOURS.len()].0), col(2, HOURS[(at + 2) % HOURS.len()].0)]);
     if rc == -22 {
-        api.widget("Forecast", HOURS[at].2);
+        api.widget("Forecast", TEXT[at]);
     }
     rc
 }
@@ -33,7 +36,7 @@ fn main(api: &'static Api) -> i32 {
     loop {
         api.rect(0, 0, api.width, api.height, 0);
         let text = if rc == 0 { "columns card set" } else { "text card (old stub)" };
-        api.text(api.width as i16 / 2 - 4 * text.len() as i16, api.height as i16 / 2 - 8, text, 0xFFFF);
+        api.text(api.width as i16 / 2 - 8 * text.len() as i16, api.height as i16 / 2 - 8, text, 0xFFFF);
         api.show();
         let Some(event) = api.event(u32::MAX) else { continue };
         match event.kind {

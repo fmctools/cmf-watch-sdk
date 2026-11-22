@@ -44,7 +44,8 @@ the exact length of its template:
 | `01` columns | `n:u8` (1..4), then `n × { caption[10] ‖ icon:u8 ‖ value[10] }` | 3 + 21·n (24, 45, 66, 87) |
 
 Text fields are UTF-8, at most 9 (caption, value) or 23/39 (text) bytes, then NUL up to the end of the field. `icon`
-indexes the package's widget icons (`docs/app-icons.md`), `FF` = none. `°` (C2 B0) is drawn as the stock `º`.
+indexes the package's widget icons (`docs/app-icons.md`), `FF` = none. In `columns` `°` (C2 B0) is drawn as the
+stock `º` (C2 BA). The text card (v1 and template `00`) is drawn as is and its font has no `°`: send `º` there.
 
 - `PUSH` refuses a malformed v2 record (`BadRequest`); a v2 record to a stub before 9 is `BadRequest` too (it takes
   exactly 64 bytes): read the stub version first and push v2 only to 9 or later.

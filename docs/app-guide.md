@@ -441,7 +441,8 @@ weather-by-hour widget: one to four columns, each a caption, one of the app's ow
 - Icons: 40×40 SVGs in `widget-icons/` next to `Cargo.toml` (`00-sun.svg`, `01-cloud.svg`, …); the index is the
   position in file name order. `scripts/build-app` renders them into the package's widget icon trailer
   (`docs/app-icons.md`). An index the package does not have makes the whole card fall back to the package name.
-- On `-22`, fall back to `widget(title, value)`:
+- On `-22`, fall back to `widget(title, value)`. **Write `º` (U+00BA) there, not `°`:** the text card is drawn as
+  is, on every stub, and its font has no `°` (an emulator frame on stub 8 showed `21°` as `21`):
 
 ```rust
 let rc = api.widget_columns(&[
@@ -449,7 +450,7 @@ let rc = api.widget_columns(&[
     Column { caption: "10:00", icon: Some(1), value: "19°" },
 ]);
 if rc == -22 {
-    api.widget("Forecast", "21°");
+    api.widget("Forecast", "21º");
 }
 ```
 
