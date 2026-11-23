@@ -105,12 +105,21 @@ jobs:
         run: |
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          # a GitHub release per tag is the changelog FMC Companion shows: the description, then the commits since the
+          # previous tag of the same kind. The firmware's has no file (the image is the vendor's: FMC only)
+          release() {  # tag title notes-file [gh release create args: files, flags]
+            prev=$(git tag --list "${1%%[0-9]*}*" --sort=-creatordate | grep -vx "$1" | head -1)
+            gh release create "$1" "${@:4}" --title "$2" --notes-file "$3" --generate-notes \
+              ${prev:+--notes-start-tag "$prev"}
+          }
+          git fetch --quiet --tags origin
           if [ -n "$FIRMWARE" ]; then
             tag=$(scripts/publish-fmc promote "$FIRMWARE" "$FIRMWARE_SHA256" out)
             git tag "$tag" "$GITHUB_SHA" && git push origin "$tag"
+            release "$tag" "Patched firmware, stub ${tag#stub-v}" out/patched-notes.md --latest=false  # Latest stays the loader
           fi
           if [ -n "$LOADER" ]; then
             tag=$(scripts/publish-fmc promote "$LOADER" "$LOADER_SHA256" out)
             git tag "$tag" "$GITHUB_SHA" && git push origin "$tag"
-            gh release create "$tag" out/loader.wp2app --title "App Loader $tag" --notes "Built from $GITHUB_SHA."
+            release "$tag" "App Loader $tag" out/loader-notes.md out/loader.wp2app
           fi

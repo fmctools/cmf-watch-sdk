@@ -100,8 +100,9 @@ the live text).
 2. The owner flashes the draft from the site. Drafts show only to FMC accounts with `moderator`, with a Draft badge.
 3. The owner approves the `fmc-prod` environment. **promote** puts the draft's bytes on the live record
    (`tested: hardware`), deletes the draft and tags the commit: `stub-v<N>` for firmware, `loader-<date>-<sha7>` for the
-   loader. A loader tag also gets a GitHub release with `loader.wp2app`. The firmware image is never attached
-   anywhere: it is based on the vendor's.
+   loader. Each tag gets a GitHub release: the draft's description, then the commits since the previous tag of its
+   kind. That is the changelog FMC Companion shows. The loader's carries `loader.wp2app`; the firmware's carries no
+   file, the image is never attached anywhere: it is based on the vendor's.
 
 A firmware release needs a higher `STUB_VERSION` in `fw/wp2-core/src/layout.rs`: FMC offers the update by that
 number. The loader is matched by its build CRC. CI signs in to FMC as a `publishers` account

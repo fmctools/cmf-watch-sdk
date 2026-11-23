@@ -4,7 +4,8 @@
   publish-fmc draft firmware target/fw-wp2.bin   checks, uploads a new unpublished record, prints its id
   publish-fmc draft loader target/loader.wp2app
   publish-fmc promote DRAFT_ID SHA256 OUT_DIR    the draft's image onto the live record, the draft deleted;
-                                                 leaves the image in OUT_DIR, prints the git tag
+                                                 leaves the image and the description
+                                                 (<kind>-notes.md) in OUT_DIR, prints the git tag
 
 Env: FMC_PUBLISHER_EMAIL, FMC_PUBLISHER_PASSWORD (a `publishers` account), FMC_URL (default prod),
 FMC_DESCRIPTION (markdown; empty keeps the live record's), GITHUB_SHA.
@@ -116,6 +117,7 @@ def promote(draft_id, sha256, out):
     call("DELETE", f"{RECORDS}/{draft_id}", token)
     Path(out).mkdir(parents=True, exist_ok=True)
     (Path(out) / name).write_bytes(data)
+    (Path(out) / f"{rec['kind']}-notes.md").write_text(rec["description"])  # the GitHub release's text
     print(f"stub-v{rec['stub']}" if rec["kind"] == "patched" else f"loader-{rec['version']}")
 
 
