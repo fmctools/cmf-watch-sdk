@@ -110,6 +110,7 @@ class ApiTest(unittest.TestCase):
             return
         if self.emu.peek(harness.POPUP_FLAGS, 1)[0] & 3:
             harness.close_popup(self.emu)
+            self.emu.keep_awake()  # closing the popup sets the stock auto-sleep back to 5 s
         if self.running() != 0xFF:
             self.emu.send("c 1", "c 0", pause=2)
         if self.emu.peek(S + 4, 2) == b"\x01\x01":
@@ -221,6 +222,7 @@ class ApiTest(unittest.TestCase):
         self.emu.send("p 4000 1 60", pause=0)
         harness.wait_popup(self.emu, True)
         harness.close_popup(self.emu)
+        self.emu.keep_awake()  # closing the popup sets the stock auto-sleep back to 5 s
         self.launch(0)
 
         async def run():
@@ -297,18 +299,29 @@ class ApiTest(unittest.TestCase):
                 await unpaused(s)
                 self.assertEqual(await ask(s, f"!keep {on}"), f"keep {on}")
 
+        async def release():
+            # the link stays up until the panel is on again: 7 s after a disconnect with the panel off the stock
+            # enters deep sleep (S3BT), which stops the emulator
+            async with session(self.port) as s:
+                await unpaused(s)
+                self.assertEqual(await ask(s, "!keep 0"), "keep 0")
+                try:
+                    self.emu.sleep(0.5)
+                    self.assertFalse(self.wake_held())
+                    self.assertTrue(self.blanked_within(10), "panel stayed on after the lock was released")
+                finally:
+                    self.emu.keep_awake()
+                    self.emu.send("c 1", "c 0", pause=2)  # wakes the panel
+
         self.run_async(keep(1))
         self.autosleep(3000)
         try:
             self.assertFalse(self.blanked_within(10), "panel blanked while the app held the lock")
             self.assertEqual(self.running(), 0)
-            self.run_async(keep(0))
-            self.emu.sleep(0.5)
-            self.assertFalse(self.wake_held())
-            self.assertTrue(self.blanked_within(10), "panel stayed on after the lock was released")
-        finally:
+        except BaseException:
             self.emu.keep_awake()
-        self.emu.send("c 1", "c 0", pause=2)  # wakes the panel
+            raise
+        self.run_async(release())
 
     def test_6_abi10_app(self):
         self.launch(1)
