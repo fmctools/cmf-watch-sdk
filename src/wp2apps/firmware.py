@@ -15,10 +15,13 @@ STUB_RAM_SIZE = 0x1000
 APP_VBASE = 0x10000000
 NOR_APP_OFFSET = 0x24000
 NOR_APP_SIZE = 0x34B000
-STUB_MAX = 0x6000  # own budget, the NOR app partition has ~964 KiB after app.bin (docs/recon.md)
+STUB_MAX = 0x7000  # own budget, the NOR app partition has ~964 KiB after app.bin (docs/recon.md)
 STUB_HEADER = struct.Struct("<4sIIIIIII")
 # header version 2 adds the watch face guard's hooks (fw/wp2-stub/src/wfguard.rs)
 STUB_HEADER_V2 = struct.Struct("<4sIIIIIII5I")
+# header version 3 adds the procedural widget type table and image list hook (fw/wp2-stub/src/wfproc.rs), the
+# image format hooks (fw/wp2-stub/src/wfimg.rs) and the data source hook (fw/wp2-stub/src/wfsrc.rs)
+STUB_HEADER_V3 = struct.Struct("<4sIIIIIII5I5I")
 VIEW_TABLE, VIEW_TABLE_END = 0x100004B8, 0x100013E8
 # 0x101461AC and 0x10055458 hold the same values but bound neighbouring tables (docs/recon.md)
 VIEW_START_LITERALS = (0x1018BC24, 0x1018DF3C)
@@ -30,6 +33,24 @@ PAGE_VIEWS = range(0xF8, 0x108)
 BOOT_CALL = 0x101884FA
 STOCK_HEAP_INIT = 0x10146AA4
 BLE_CALL = 0x100D34F0
+# procedural face widgets (wfc tag 0x82 + 0x5C): 0x18-byte entries {u32 type, create, destroy, update, tick, opt}
+# for types 0..3 and a 0xFFFF entry. The five loops that walk it stop at 0xFF, so any other type runs past the end
+# (docs/recon.md, "Watch 3 Pro faces"). Header version 3 points them at the stub's table, which ends with 0xFF
+PROC_TYPES = 0x101F3D6C
+PROC_TYPES_LITERALS = (0x100DC3BC, 0x100DC828, 0x100DCC40, 0x100DCCD8, 0x100DDE80)
+PROC_TYPE = struct.Struct("<6I")
+PROC_STOCK = 4  # entries copied from the stock
+PROC_TYPES_MAX = 32
+PROC_END = 0xFF
+# the parser of 0x82 drops a widget without an image here (Rainbow Lollipop's type 4 has none)
+PROC_LIST_CALL = 0x100DB378
+STOCK_IMAGE_LIST = 0x101B7810
+# format 28 (ETC2) of Watch 3 Pro faces: the format mapping in the face's image loader and in the header reader
+# 0x101B8E28 (items are drawn with the latter's), and the loader's LZ4 call
+IMAGE_CF_CALLS, STOCK_IMAGE_CF = (0x100DB7B6, 0x101B8E5E), 0x101B8FD2
+IMAGE_UNPACK_CALL, STOCK_IMAGE_UNPACK = 0x100DB9F0, 0x101822C0
+# the data source dispatcher 0x100DAA90 on a source past its table (0x8D): mvn r0, #0xf, then it returns
+SOURCE_UNKNOWN, STOCK_SOURCE_UNKNOWN = 0x100DAACC, bytes.fromhex("6ff00f00")
 # the watch face guard's hooks in the order of both stub headers
 WF_BOOT, WF_SAVED, POWER_DOWN, FORCED_REBOOT, WF_PARSE = range(5)
 # (bl site, its stock target, hook), docs/recon.md "Watch face boot guard"
@@ -257,11 +278,13 @@ def patch(app: bytes, stub: bytes | None = None, *, motor: int | None = None, re
 
 def add_stub(out: bytearray, stub: bytes) -> None:
     version = struct.unpack_from("<I", stub, 4)[0]
-    header = STUB_HEADER_V2 if version == 2 else STUB_HEADER
-    magic, version, boot, ble, view_proc, view_name, applist, widget, *guard = header.unpack_from(stub)
+    header = {2: STUB_HEADER_V2, 3: STUB_HEADER_V3}.get(version, STUB_HEADER)
+    magic, version, boot, ble, view_proc, view_name, applist, widget, *rest = header.unpack_from(stub)
+    guard, (types, proc_list, image_cf, image_unpack, source) = rest[:5], (*rest[5:], 0, 0, 0, 0, 0)[:5]
     base = APP_VBASE + STUB_OFFSET
-    code = (boot, view_proc) + tuple(p for p in (ble, applist) if p) + tuple(guard)
-    if (magic != b"WP2S" or version not in (1, 2) or not all(p & 1 for p in code)
+    code = (boot, view_proc) + tuple(p for p in (ble, applist, proc_list, image_cf, image_unpack, source) if p)
+    code += tuple(guard)
+    if (magic != b"WP2S" or version not in (1, 2, 3) or not all(p & 1 for p in code)
             or not all(base <= p & ~1 < base + len(stub) for p in (*code, view_name))):
         raise ValueError("bad stub header")
     if widget:
@@ -271,6 +294,8 @@ def add_stub(out: bytearray, stub: bytes) -> None:
         wid, callbacks = entry[0], entry[5:]
         if wid != WGT_ID or not all(p & 1 and base <= p & ~1 < base + len(stub) for p in callbacks):
             raise ValueError("bad stub widget entry")
+    if types:
+        _check_proc_types(out, stub, types)
     if len(out) != STUB_OFFSET:
         raise ValueError(f"app.bin is {len(out):#x} bytes; the stub goes at {STUB_OFFSET:#x}")
     out += stub
@@ -292,6 +317,17 @@ def add_stub(out: bytearray, stub: bytes) -> None:
         put(out, APPLIST_LAYOUT, struct.pack("<I", STOCK_APPLIST_LAYOUT), struct.pack("<I", applist))
     if widget:
         put(out, WGT_REG + 4 * WGT_ID, bytes(4), struct.pack("<I", widget))
+    if proc_list:
+        put(out, PROC_LIST_CALL, thumb_bl(PROC_LIST_CALL, STOCK_IMAGE_LIST), thumb_bl(PROC_LIST_CALL, proc_list & ~1))
+    for call, target, hook in (*((at, STOCK_IMAGE_CF, image_cf) for at in IMAGE_CF_CALLS),
+                               (IMAGE_UNPACK_CALL, STOCK_IMAGE_UNPACK, image_unpack)):
+        if hook:
+            put(out, call, thumb_bl(call, target), thumb_bl(call, hook & ~1))
+    if source:
+        put(out, SOURCE_UNKNOWN, STOCK_SOURCE_UNKNOWN, thumb_b_w(SOURCE_UNKNOWN, source & ~1))
+    if types:
+        for lit in PROC_TYPES_LITERALS:
+            put(out, lit, struct.pack("<I", PROC_TYPES), struct.pack("<I", types))
     if guard:
         put_guard(out, GUARD_WP2, guard)
 
@@ -299,6 +335,24 @@ def add_stub(out: bytearray, stub: bytes) -> None:
 def put_guard(out: bytearray, sites: tuple, hooks: list[int]) -> None:
     for at, stock, hook in sites:
         put(out, at, thumb_bl(at, stock), thumb_bl(at, hooks[hook] & ~1))
+
+
+def _check_proc_types(app: bytearray, stub: bytes, table: int) -> None:
+    """The stock's entries unchanged, then entries of the stub's own handlers, the last one for PROC_END: a face with
+    that type matches it, so it needs handlers too."""
+    base, size = APP_VBASE + STUB_OFFSET, PROC_TYPE.size
+    count = min(PROC_TYPES_MAX, (base + len(stub) - table) // size) if base <= table and not table % 4 else 0
+    entries = [PROC_TYPE.unpack_from(stub, table - base + i * size) for i in range(count)]
+    kinds = [entry[0] & 0xFFFF for entry in entries]
+    if count <= PROC_STOCK or PROC_END not in kinds[PROC_STOCK:]:
+        raise ValueError("bad stub type table: no end")
+    stock = PROC_TYPES - APP_VBASE
+    if stub[table - base:table - base + PROC_STOCK * size] != app[stock:stock + PROC_STOCK * size]:
+        raise ValueError("bad stub type table: the stock types differ")
+    own = entries[PROC_STOCK:kinds.index(PROC_END, PROC_STOCK) + 1]
+    for _, *handlers, opt in own:
+        if not all(p & 1 and base <= p & ~1 < base + len(stub) for p in handlers + [opt] * bool(opt)):
+            raise ValueError("bad stub type table: handler outside the stub")
 
 
 def patch_wp3(app: bytes, stub: bytes) -> bytes:

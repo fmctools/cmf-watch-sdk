@@ -2,7 +2,8 @@
 it is booted or picked, a face that dies after its load falls back on the third death, power off, reboot and the OTA
 reboot do not count. The bad face is WP2_BAD_FACE (default: the DataPulse port from cmf-watch-utils
 runs/bootloop-repro/), imported over local273.wfc, the default face. Needs target/app-wp2.bin and target/app-wp3.bin
-from scripts/build-fw (stub version 9)."""
+from scripts/build-fw. Stub 11 no longer faults on that face, so the Watch Pro 2 runs here get an app.bin whose
+procedural type table is the stock's again."""
 import asyncio
 import os
 import shutil
@@ -14,7 +15,7 @@ from unittest import skipUnless
 
 from tests.e2e import harness
 from wp2apps import cli as wp2
-from wp2apps import link, paths
+from wp2apps import firmware, link, paths
 
 FLAG = b"/NAND:/wp2wfgrd"
 WFM = 0x9055
@@ -44,6 +45,16 @@ def bad_fixtures() -> Path:
         (fixtures / name).unlink(missing_ok=True)
         (fixtures / name).symlink_to(target)
     return fixtures
+
+
+def faulting_nor() -> bytes:
+    """The patched paired NOR with the stock's type table back, the bug BAD_FACE faults on (tag 0x82 type 6)."""
+    from tests.e2e.netsim import paired_nor
+    app = bytearray((paths.ROOT / "target/app-wp2.bin").read_bytes())
+    for lit in firmware.PROC_TYPES_LITERALS:
+        struct.pack_into("<I", app, lit - firmware.APP_VBASE, firmware.PROC_TYPES)
+    firmware.fix_acth(app)
+    return firmware.stage_nor(paired_nor(), bytes(app))
 
 
 def wfm(port, payload: bytes) -> bytes:
@@ -94,7 +105,7 @@ class WatchFaceGuardTest(unittest.TestCase):
 
     def test_bad_face_falls_back_once(self):
         from tests.e2e.netsim import netsim
-        nor = harness.patched_paired_nor()
+        nor = faulting_nor()
         faces = [273, 274, 275, 276, 277, 280]
         with netsim() as port, harness.Emu("wfguard", nor=nor, fixtures=bad_fixtures(), hci_port=port,
                                            seconds=1500) as emu:

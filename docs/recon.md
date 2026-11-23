@@ -861,3 +861,138 @@ the setup screens; boot 1 always reboots out of setup).
 Not covered beyond the list above: a face that really faults 1.0.1.77; OTA of the image (the emulator installs only
 WP2's; this one is checked by unpacking it and by `fwkit verify`); the 3 Pro emulator profile is experimental
 (synthetic storage layout).
+
+## Watch 3 Pro faces (stub 11)
+
+WP2 parses the faces of the Watch 3 Pro (jx402_08 1.0.1.77). DataPulse and Luminous Beam boot-looped on a
+procedural widget, tag `0x82` with a `0x5C` child.
+
+| Item | Finding | Confidence |
+|---|---|---|
+| Parser | `0x100DB1B4` reads `0x82` + `0x5C` on WP2 too and makes an item of kind 6; the widget type is the first u16 of the `0x5C` payload | high (static + emulator) |
+| Type table | `0x101F3D6C`, 0x18 B per entry: u32 type, create, destroy, update, tick, optional. Types 0..3, then `0xFFFF`. The 3 Pro's (`0x1022082C`) has 0..7 | high (static) |
+| Readers | five, all through a literal: `0x100DC38C` (update), `0x100DC78C` (destroy), `0x100DCBD4` (tick), `0x100DCC6C` (optional), `WFManager_Update` `0x100DD5AC` (create). Literals `0x100DC3BC`, `0x100DC828`, `0x100DCC40`, `0x100DCCD8`, `0x100DDE80` | high (image scan) |
+| The bug | each compares the type with the entry, then stops at `0xFF`; the stock ends with `0xFFFF`, so an unknown type reads on past the table and calls the first value that matches | high (static + gdb) |
+| Effect | 5, 6 and 7 fault (first fault of DataPulse: PC `0x10`, CFSR INVSTATE, LR `0x100DDE0B`). Type 4 never gets to the table: the parser drops it first (next row) | high (static + emulator + gdb) |
+| Type 4 and the parser | `0x100DB1B4` looks the widget's first image up (`bl 0x101B7810` at `0x100DB378`) and returns -19 without one, before it adds the item. Rainbow Lollipop's widget has no images, so on the stock it is never created. The lookup reads the list at a fixed offset whatever tag 1's length: with a short tag 1 and a condition after it, it reads the condition's tag and length as a list, finds an image and the type goes on to the table, so such a type 4 faults the stock too, as does a type 4 with real images | high (gdb on the stock: parse returns -19, no create; the short tag and the images from FMC's synthetic faces, emulator 3/3 faults each) |
+
+The stub's table (`fw/wp2-stub/src/wfproc.rs`, stub header version 3, field 14) replaces it through the five literals:
+the stock's four entries, the stub's types 4..7, then `0xFF`. That entry has handlers that do nothing, as a face with
+type `0xFF` matches it. A type that is not listed stays an empty object and the rest of the face works. Field 15 is
+the stub's replacement of the parser's `bl` at `0x100DB378`: type 4 passes without an image, every other type goes to
+the stock's lookup.
+
+Emulator (preview.10 QEMU and ROM, profile `wp2-stock`, 45 s, `tests/test_wp3faces_e2e.py`):
+
+| Face | Type | Boots/faults, stub 9 | Boots/faults, stub 11 |
+|---|---|---|---|
+| Cluster Clock (control) | none | 1/0 | 1/0 |
+| Rainbow Lollipop | 4 | 1/0 (widget dropped) | 1/0 |
+| Briqbot | 5 | 2/1 | 1/0 |
+| DataPulse | 6 | 2/1 | 1/0 |
+| Luminous Beam | 7 | 2/1 | 1/0 |
+
+`tests/test_wfguard_e2e.py` puts the stock table back in its test image, as the guard needs a face that faults.
+
+FMC's synthetic faces (made by its agent from the Lollipop original or from nothing, kept outside git), stub 11, 60 s,
+`runs/wp3/tools/synth.py`:
+
+| Face | Stock | Stub 11 |
+|---|---|---|
+| type 4, tag 1 of 18 B, then a condition | 3/3 | 1/0 |
+| type 6, the same | 3/3 | 1/0 |
+| type 4 with an image list | 3/3 | 1/0 |
+| type 4, tag 1 of 20 B with the condition; the plain shape (controls) | 1/0 | 1/0 |
+| 12 full-screen cf 28 layers: 2.6 MB as ETC2, 7.8 MB as the cf 5 the stub makes of them | | 2 boots: `MllcFailedHook` (ResFbHeap 6.5 MB, 96 % used), the guard falls back to 274 |
+
+The stub holds a cf 28 image as cf 5, three times its packed size, and leaves the memory check to the stock: such a face
+runs out of ResFbHeap like a cf 5 face of that size, and the guard takes it off at the next boot. FMC counts cf 28 as
+cf 5 against its memory budget before an install (fmctools/fmc #116).
+
+### Type 6, DataPulse's panels
+
+The u8 at `0x5C` payload +0x14 picks the panel; the images come from the list of the widget's tag 1 (88 for the
+weather, 13 for the others) through the stock's `0x101B94A2`, freed with `0x100DBB00`. wp2-core `wfproc.rs` turns the
+data into images and rectangles (host-tested), the stub makes the objects and rebuilds them when that list changes.
+The layout was read from the 3 Pro (create `0x100D7FC8`, update `0x101D5CFC`); the data is the WP2's:
+
+| Panel | ux2sys | WP2 layout | 3 Pro |
+|---|---|---|---|
+| 0 weather, 4 hours | `0x14` (copy, 0x1B0 B) | start hour +2, current code +0xC and temperature +0x10, 24 x {i32, u8} from +0x98, city +0x158; read as the stock card `0x100ACB20` does. 12 h: `0x7C`, Fahrenheit: `0x7D` | same block; its getter shifts the hours, `0x82` and `0x83` |
+| 1 heart rate | `0x0D` (pointer) | 4 B per hour +0x120, max +0x180, min +0x181 (`0x1006F940`) | +0x5A0, +0x600, +0x601 |
+| 2 SpO2 | `0x17` (pointer) | 2 B per hour +0x30 (`0x10084220`); the day's range is computed from them | the getter also fills +0x60, +0x61 |
+| 3 stress | `0x80` (pointer) | 2 B per hour +0x31 (`0x100AEB18`) | `0x86`, same layout |
+| 4 sleep | `0x16` (pointer) | valid +0x5E, start and end +0x64, +0x68, stages from +0x6C, count +0x1FC (`0x100E278C`) | same |
+
+The 3 Pro's property numbers and offsets must not be reused: `0x86` is another block on WP2 and the heart rate's
+offsets point past the WP2's.
+
+Emulator evidence (frames in the ignored `runs/wp3/frames/`, the vendor's images are not committed):
+
+- without data the two panels that show by default match the 3 Pro 1.0.1.77 pixel for pixel (lit-pixel IoU 1.000 at
+  the 2 px x shift that the whole face has between the two emulated models);
+- each of the five panels drew synthetic data put into RAM over gdb, 1 boot and 0 faults each;
+- 20 switches to 274 and back over `0x9055` (destroy and create at run time): 1 boot, 0 faults.
+
+### Types 4, 5 and 7
+
+| Type | Face | What the stub does | Input |
+|---|---|---|---|
+| 4 | Rainbow Lollipop | lights the ring under the finger up: 14 rings 4 px wide, 16 px apart | press, release |
+| 5 | Briqbot | plays a clip at 33 ms per frame (frames 0..39, 40..89, 90..158) and holds its last frame, a tap starts the next clip. One decoded frame is kept | tap, `lv_timer` |
+| 7 | Luminous Beam | percent of the calorie goal in three rotated digits | ux2sys `0x33` +8 (goal), `0x15` +0x1A4 (today), as `0x10081AA4` reads them. The 3 Pro's goal property `0x36` has no getter on WP2 |
+
+Emulator: a press lights the ring (`test_lollipop_ring_lights_up`), three taps went through the robot's clips, Luminous
+Beam's `0%` sits where the 3 Pro draws it.
+
+### Image format 28 (ETC2)
+
+Format 28 of the 3 Pro's faces (Vive Lite's hands, time and day, Briqbot's dial) is ETC2 RGBA8 with EAC alpha, 16 B per
+4x4 block, LZ4-packed: the 3 Pro maps it to its internal `0x15` (`0x101D5256`) and draws it as it is. WP2's map
+`0x101B8FD2` leaves it 28, a format it cannot size or draw. The stub (`fw/wp2-stub/src/wfimg.rs`, decoder in wp2-core
+`etc2.rs`, written from the Khronos specification) turns it into cf 5 while the face loads:
+
+| Call | In | Stub, header version 3 |
+|---|---|---|
+| `0x100DB7B6` `bl 0x101B8FD2` | image loader `0x100DB750` | field 16: 28 becomes 5 |
+| `0x101B8E5E` `bl 0x101B8FD2` | header reader `0x101B8E28`, whose format the items are drawn with | field 16 again |
+| `0x100DB9F0` `bl 0x101822C0` (LZ4) | image loader | field 17: if the file's format is 28, unpack the blocks to a temporary buffer and decode into the cf 5 one |
+
+The decoder agreed with an independent one on 200,000 random blocks (one per colour mode is kept as a test).
+
+In the emulator such a face needs the decoded images' hashes in the texture index: the VG-Lite model of cmf-watch-utils
+tells packed RGB565 + alpha from ARGB8888 by SHA-256 of the texture only, and the face import lists cf 5 resources
+alone. Without them the decoded images show as noise although RAM holds the right pixels. The e2e adds them
+(`etc2_textures`). On hardware the memory layout is the stock's cf 5; not tested there, nor is the decode time
+(456x456 at most in the test faces).
+
+### Data sources and the colour theme
+
+| Item | Finding | Confidence |
+|---|---|---|
+| Table | WP2's dispatcher `0x100DAA90` has sources 0..0x8D, the 3 Pro's (`0x100D2A78`) 0..0x9D | high (static) |
+| 0x1B, 0x42, 0x8A, 0x8B, 0x8C | on both, the handlers do the same (SpO2 +0x68, sleep +0, two weather fields, stress), each build with its own offsets | high (static, both decompiled) |
+| 0x99 | the active face's theme number; Eleginn picks its background with it. The stub answers it from WP2's own getter `0x100DD56C` (index `0x3801AE55`), 0 without a theme. Hook: the dispatcher's error branch `0x100DAACC`, header field 18 | high (emulator: the dispatcher called directly). The face not seen: its original stops the emulator on A8 |
+| 0x93 | sleep (ux2sys `0x16` +2). No tag 1 of the test faces uses it; not implemented | medium (static + scan of tag 1) |
+| Palettes | a themed layer stores a colour number. WP2 has 10 colours (`0x101FF59C`), the 3 Pro 7 (`0x10235316`): 3 Pro 0, 1, 2, 3, 4 are WP2 0, 2, 4, 5, 6; 3 Pro 5 (`0xF719`) and 6 (`0xD73A`) are not in WP2's | high (static) |
+| Default theme | `0x100DD56C` gives ids `0x111` and `0x114` a default theme (1 and 3) before the face's own. A face imported over 273 in the emulator gets theme 1 | high (static) |
+
+The stub does not touch the palette: WP2's own faces use the same numbers and nothing in a face says which build it is
+for. Colour numbers are for the converter to remap. Colours that differ from the 3 Pro in the emulator (Duskscape's
+minutes, Cluster Clock, Citrusdash) were not each traced to this.
+
+JPEG layers (format 1) need nothing: WP2's loader decodes them (Briqbot's 160 frames, Vintage Pointe's two layers).
+
+### All test faces, stub 9 against stub 11
+
+24 files (the 3 Pro originals and their `port_wp3` ports), 45 s each, profile `wp2-stock`: the five files of DataPulse,
+Luminous Beam and Briqbot went from 2 boots/1 fault to 1/0, none of the others changed. Five stop the emulator with
+either stub, neither for a reason in the firmware patch:
+
+| Files | Stop | Needs |
+|---|---|---|
+| Citrusdash (2) and Eleginn, originals with A8 images | compatibility ROM, GUI API slot 12 (`0x70A0` + 0x30), called from `0x101006E4` | the slot in cmf-watch-utils' compat ROM. The SDK names it `p_sw_transform_config`; the real ROM was not read |
+| Spinnin' Dials (2) | write to `0x40070504` (VG-Lite) | a VG-Lite model in cmf-watch-utils |
+
+Not covered: hardware, real health and weather data, an upload of such a face, the A8 and VG-Lite stops above, colour
+parity with the 3 Pro, the calorie digits with data (host-tested only).
