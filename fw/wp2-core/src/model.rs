@@ -235,6 +235,22 @@ model! {
     applist_data_count: u32 = Off,
     applist_data_label_style: u32 = Off,
     applist_data_line_h: u32 = Off,
+    /// u8 in the view data: bit 0..2 show the three optional stock entries (WP3)
+    applist_data_flags: Option<u32> = Off,
+    /// stock entries shown with every optional one hidden
+    applist_always_shown: u32 = Val,
+    /// grid style, in the view data: 30 entry objects (lv_obj_t *), the container, the u8 count, the lowest y
+    applist_grid_objs: Option<u32> = Off,
+    applist_grid_cont: Option<u32> = Off,
+    applist_grid_count: Option<u32> = Off,
+    applist_grid_lowest: Option<u32> = Off,
+    /// (view data) places the grid objects from `applist_grid_objs` (count from the container)
+    applist_grid_place: Option<u32> = Func,
+    /// side of the stub's entry icon in the list / the grid (stock icon size)
+    applist_list_icon: u32 = Size,
+    applist_grid_icon: Option<u32> = Size,
+    /// (label, 0, -1, 0) after the text is set: the stock list rows' long-mode scroll setup
+    label_scroll_setup: Option<u32> = Func,
     simple_img_create: u32 = Func,
     simple_img_set_src: u32 = Func,
     simple_img_set_zoom: u32 = Func,
@@ -549,6 +565,18 @@ pub const WP2: Model = Model {
     applist_data_count: 8,
     applist_data_label_style: 0x200,
     applist_data_line_h: 0x214,
+    // the WP2 list has no optional entries and the stub hooks only the list
+    applist_data_flags: None,
+    applist_always_shown: 25,
+    applist_grid_objs: None,
+    applist_grid_cont: None,
+    applist_grid_count: None,
+    applist_grid_lowest: None,
+    applist_grid_place: None,
+    // mirrors wp2-stub applist.rs ICON
+    applist_list_icon: 96,
+    applist_grid_icon: None,
+    label_scroll_setup: None,
     simple_img_create: stock::SIMPLE_IMG_CREATE,
     simple_img_set_src: stock::SIMPLE_IMG_SET_SRC,
     // mirrors wp2-stub applist.rs VIMG_SET_ZOOM, VLABEL_*, OBJ_GET_Y/Y2, OBJ_SET_X/OPA, OBJ_ADD_STYLE, EVENT_SEND
@@ -797,9 +825,13 @@ pub const WP3: Model = Model {
     // table, no id-sized array: a word-1 proc record re-id'd 0x120 got preload, layout, focus, key and delete).
     // Caveat for the plan: 0x118..0x146 are also the msgbox ids, which double as wake-lock ids (msgbox close
     // unlocks its mid; wake ids <= 0x150, stock also takes 0x149, 0x14D..0x14F); 0x120 is LOW_POWER_MSGBOX_ID's
-    // wake lock. Free wake ids: 0x147, 0x148, 0x14A..0x14C
-    menu_view: 0x120,
-    page_view_base: 0x121,
+    // wake lock. Free wake ids: 0x147, 0x148, 0x14A..0x14C.
+    // Decision (M1): the menu view is 0x147, a free wake id, so the loader's future wake lock can reuse its view id
+    // as on WP2 (layout::VIEW_ID) without touching a msgbox's lock; page views go above the wake-lock bound
+    // (0x151..0x160), where no msgbox or wake id lives. Emulator M1: 0x147 opens from the app list, back returns
+    // to it, nothing locks or unlocks 0x147 (cmf-wp3-loader-port m1-evidence)
+    menu_view: 0x147,
+    page_view_base: 0x151,
     // source: emu (gdb): breakpoints on view_send 0x101A132D, view_key 0x101A3E45 and a word-1 proc record: preload,
     // layout, delete, focus, defocus and key as on WP2 (goodbye_view's proc compares 2, 3, 4)
     view_msg_preload: Some(2),
@@ -816,8 +848,10 @@ pub const WP3: Model = Model {
     key_crown_press: Some(0x0400_0001),
     // source: emu (gdb): the knob callback 0x10157B39 posts one key per 3 detents, plain 0x1E / 0x1F, to every
     // view (also lists; no LVGL knob event seen); the launcher names them KEY_KONB_CLOCKWISE / _ANTICLOCKWISE.
-    // In the emulator `r +80` gives 0x1F and `r -80` 0x1E (WP2's `r 80` gave 0xFFFF006F); hardware direction
-    // unverified
+    // In the emulator `r +80` gives 0x1F and `r -80` 0x1E (WP2's `r 80` gave 0xFFFF006F). Hardware (owner
+    // observation, medium confidence): crown turned clockwise seen from its end scrolls the stock app list to later
+    // entries, which matches the firmware's naming, so 0x1E = clockwise = next/down, 0x1F = previous/up; the
+    // emulator's `r` sign is the opposite convention. Not measured on hardware with a probe
     key_crown_cw: Some(0x1E),
     key_crown_ccw: Some(0x1F),
     // source: emu (gdb): right swipe arrives as 0xFFFF0071 (low half, as on WP2)
@@ -899,6 +933,22 @@ pub const WP3: Model = Model {
     applist_data_count: 8,
     applist_data_label_style: 0x264,
     applist_data_line_h: 0x274,
+    // source: kit app-list + patch (the hook that ran on a real WP3): flags bit0 entry 11, bit1 entry 9, bit2 entry
+    // 10; 27 entries always shown (28 in the emulator default)
+    applist_data_flags: Some(0x290),
+    applist_always_shown: 27,
+    // source: kit app-list + patch: grid layout 0x10046B6C fills the 30-pointer array, the container and the count;
+    // the lowest row's y at +0x1F8 bounds the scroll; 0x101C70EB places every object
+    applist_grid_objs: Some(0x16C),
+    applist_grid_cont: Some(0x1E4),
+    applist_grid_count: Some(0x1E8),
+    applist_grid_lowest: Some(0x1F8),
+    applist_grid_place: Some(0x101C_70EB),
+    // source: patch (96 px list icons, 160 px grid icons, three per 160 px row)
+    applist_list_icon: 96,
+    applist_grid_icon: Some(160),
+    // source: patch (the stock list rows call it after the text)
+    label_scroll_setup: Some(0x101E_CE0B),
     // source: map + patch
     simple_img_create: 0x1004_1959,
     simple_img_set_src: 0x101C_675D,
@@ -1216,11 +1266,17 @@ mod tests {
                 assert!(id > m.stock_view_id_max && id <= 0xFFFF, "{} view {id:#x}", m.name);
             }
         }
-        // 2.3: stock WP3 uses views 0xF0..0x117. Emulator recon: msgbox ids 0x118..0x146 share the wake-lock id
-        // space (<= 0x150); BTCALL 0x119 and AOD 0x136 are the ones stock locks by constant (WP3 note on menu_view)
+        // 2.3: stock WP3 uses views 0xF0..0x117. Emulator recon: msgbox ids 0x118..0x146 double as wake-lock ids
+        // (bound 0x150); stock also locks 0x149 and 0x14D..0x14F. The menu takes the free wake id 0x147 (the
+        // loader's lock), the pages stay above the bound (WP3 note on menu_view)
+        let msgboxes = WP3.stock_view_id_max + 1..=0x146;
+        let stock_wake = [0x149, 0x14D, 0x14E, 0x14F];
         for id in stub_views(&WP3) {
-            assert!(!(0xF0..=0x117).contains(&id) && id != 0x119 && id < 0x136, "{id:#x}");
+            assert!(!msgboxes.contains(&id) && !stock_wake.contains(&id), "{id:#x}");
         }
+        assert_eq!(WP3.menu_view, 0x147);
+        assert!([0x147, 0x148, 0x14A, 0x14B, 0x14C].contains(&WP3.menu_view));
+        assert!(WP3.page_view_base > 0x150);
         assert_eq!(stub_views(&WP2), [0xF0, 0xF8, 0xF9, 0xFA, 0xFB, 0xFC, 0xFD, 0xFE, 0xFF, 0x100, 0x101, 0x102,
             0x103, 0x104, 0x105, 0x106, 0x107]);
         assert_eq!(cards::page_slot(WP2.page_view_base + 3), Some(3));
@@ -1288,6 +1344,11 @@ mod tests {
         assert_eq!(WP3.applist_hook_slot, WP3.applist_list_ops + 8);
         assert_eq!(WP3.applist_grid_hook_slot, WP3.applist_grid_ops.map(|o| o + 8));
         assert_ne!(Some(WP3.applist_hook_slot), WP3.applist_grid_hook_slot);
+        // the grid's count and container follow the 30 object pointers
+        assert_eq!(WP3.applist_grid_cont, WP3.applist_grid_objs.map(|o| o + 4 * WP3.applist_entries));
+        assert_eq!(WP3.applist_grid_count, WP3.applist_grid_cont.map(|c| c + 4));
+        assert!(WP3.applist_always_shown + 3 == WP3.applist_entries);
+        assert_eq!(WP2.applist_always_shown, WP2.applist_entries);
         assert_eq!(WP3.wgt_free_id, None);
     }
 
