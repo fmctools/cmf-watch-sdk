@@ -746,7 +746,9 @@ pub const WP3: Model = Model {
     heap_base: 0x380E_91C0,
     // source: map + own (literal passed to heap init)
     heap: 0x3805_CCE0,
-    // source: own (heap init `strd r2, r2, [r4, #8]`, `str r5, [r4, #0x60]`); node layout not re-read
+    // source: own (heap init `strd r2, r2, [r4, #8]`, `str r5, [r4, #0x60]`) + emu (gdb): walking the free list at
+    // idle, nodes are {u32 next, u32 size} (size & 0xFF_FFFF, header included) and their sizes sum to exactly the
+    // u32 at +8; the list ends at the zero-size node *(heap + 0x68) = heap_base + heap_size - 0x10
     heap_free: 8,
     heap_free_list: 0x60,
     // source: hunt (computed: heap_base + heap_size - 0x1000)
@@ -762,12 +764,17 @@ pub const WP3: Model = Model {
     os_sleep: 0x101D_BA53,
     k_thread_abort: 0x1011_4B65,
     sys_clock_tick_get: 0x101B_2EE9,
-    // TODO(M1 recon): thread priorities not listed for WP3
-    app_thread_prio: None,
-    // source: hunt (same field offsets)
+    // source: emu (gdb): thread list walk (_kernel 0x3805DC14, list +0x2C, k_thread next +0x74, name +0x78, s8 prio
+    // +0xE as on WP2): idle 15, standby/actlog/shell_uart 14, vendor/wewear/ble_fate 13, ui_service 3: 14 is still
+    // the lowest priority below idle
+    app_thread_prio: Some(14),
+    // source: hunt + emu (gdb): update_msgbox_info 0x100D0FBD keeps the state at 0x38015B88 (+0x34 flags, +0x36 and
+    // +0x38 ids); charger in (`p 4000 1 60`) gave flags 1, id 0x129 (CHARGE_MSGBOX_ID) at +2
     popup_flags: 0x3801_5BBC,
-    // TODO(M1 recon): AOD msgbox id not re-derived
-    aod_msgbox: None,
+    // source: own + emu (gdb): msgbox ids are 0x118 + index into the 16 B table 0x10221B94 (name at +0xC; the
+    // charger popup's 0x129 is CHARGE_MSGBOX_ID there); AOD_MSGBOX_ID is index 30. update_msgbox_info puts 0x136 in
+    // the second slot (flag bit 1), and the AOD code wake-locks 0x136
+    aod_msgbox: Some(0x136),
 
     // source: map + own
     view_table: 0x1000_050C,
@@ -783,26 +790,38 @@ pub const WP3: Model = Model {
     // source: map
     view_open: 0x1019_DEB1,
     view_layout: 0x101F_8A01,
-    // source: own (table walk: 38 stock ids in 0xF0..0x117)
+    // source: own (table walk: 38 stock ids in 0xF0..0x117) + emu (gdb): the table read through its literals at
+    // runtime has 184 records, max id 0x117
     stock_view_id_max: 0x117,
-    // source: plan 2.3 (proposal above 0x117, clear of the 0x119 and 0x136+ wake-lock ids); M1 recon must confirm
-    // the view manager takes ids >= 0x118
+    // source: plan 2.3 + emu (gdb): the view manager takes ids above 0x117 (view_open looks the id up linearly in the
+    // table, no id-sized array: a word-1 proc record re-id'd 0x120 got preload, layout, focus, key and delete).
+    // Caveat for the plan: 0x118..0x146 are also the msgbox ids, which double as wake-lock ids (msgbox close
+    // unlocks its mid; wake ids <= 0x150, stock also takes 0x149, 0x14D..0x14F); 0x120 is LOW_POWER_MSGBOX_ID's
+    // wake lock. Free wake ids: 0x147, 0x148, 0x14A..0x14C
     menu_view: 0x120,
     page_view_base: 0x121,
-    // TODO(M1 recon): view proc message numbers not re-read (generic view proc 0x100CFDB9)
-    view_msg_preload: None,
-    view_msg_layout: None,
-    view_msg_delete: None,
-    view_msg_focus: None,
-    view_msg_defocus: None,
-    view_msg_key: None,
-    view_msg_suspend: None,
-    view_msg_wake: None,
-    // TODO(M1 recon): key codes not re-read
-    key_crown_press: None,
-    key_crown_cw: None,
-    key_crown_ccw: None,
-    key_back: None,
+    // source: emu (gdb): breakpoints on view_send 0x101A132D, view_key 0x101A3E45 and a word-1 proc record: preload,
+    // layout, delete, focus, defocus and key as on WP2 (goodbye_view's proc compares 2, 3, 4)
+    view_msg_preload: Some(2),
+    view_msg_layout: Some(3),
+    view_msg_delete: Some(4),
+    view_msg_focus: Some(7),
+    view_msg_defocus: Some(8),
+    view_msg_key: Some(0xD),
+    // source: emu (gdb) + own: screen off/on (autosleep kept) sends 0xCA then 0xCB to the focused view; launcher
+    // early-suspend/late-resume post them (`movs r1, #0xca` / `#0xcb`, then view_post 0x101F89D1)
+    view_msg_suspend: Some(0xCA),
+    view_msg_wake: Some(0xCB),
+    // source: emu (gdb) view_key: crown short press 0x04000001 (long press 0x20000001, 0x10000001, 0x02000001)
+    key_crown_press: Some(0x0400_0001),
+    // source: emu (gdb): the knob callback 0x10157B39 posts one key per 3 detents, plain 0x1E / 0x1F, to every
+    // view (also lists; no LVGL knob event seen); the launcher names them KEY_KONB_CLOCKWISE / _ANTICLOCKWISE.
+    // In the emulator `r +80` gives 0x1F and `r -80` 0x1E (WP2's `r 80` gave 0xFFFF006F); hardware direction
+    // unverified
+    key_crown_cw: Some(0x1E),
+    key_crown_ccw: Some(0x1F),
+    // source: emu (gdb): right swipe arrives as 0xFFFF0071 (low half, as on WP2)
+    key_back: Some(0x71),
 
     // source: hunt + own (`ldrh.w r1, [r4, #1]` before it: frame in r4)
     ble_call: 0x100C_253A,
@@ -837,7 +856,8 @@ pub const WP3: Model = Model {
     // source: map
     stream_space: 0x101E_E19D,
     kv_get: 0x1011_EC0D,
-    // source: map + kit review (SEND literal)
+    // source: map + kit review (SEND literal) + emu (gdb): a pointer to the context as on WP2 (0x380471E4 at
+    // idle); bit 0 of ctx +4 is written at 0x100C0D6E (`bfi r2, r4, #0, #1`), idle value 0 without BLE
     wewear_ctx: 0x3802_61B0,
     // source: hunt (corrected; map's 0x380032F1 is off by one)
     session_key: 0x3800_32F2,
@@ -870,9 +890,11 @@ pub const WP3: Model = Model {
     applist_grid_hook_slot: Some(0x1021_5948),
     // source: kit app-list + patch (30 entries, 27..30 shown)
     applist_entries: 30,
-    // TODO(M1): view -> data offset not re-read for WP3
-    applist_view_data: None,
-    // source: kit app-list
+    // source: emu (gdb): List and Grid (property 0x2F forced to 1 at its getter 0x101C6FA9) both keep data at
+    // *(view + 0x14); list: cont +4 (28 children shown), count +8 = 30, label style +0x264 (lv_style_t, prop 0x57
+    // text font), font +0x26C whose line_height (+8) is +0x274 = 47; grid: cont +0x1E4, count +0x1E8 = 30
+    applist_view_data: Some(0x14),
+    // source: kit app-list + emu (gdb), see applist_view_data
     applist_data_cont: 4,
     applist_data_count: 8,
     applist_data_label_style: 0x264,
@@ -906,6 +928,8 @@ pub const WP3: Model = Model {
 
     // source: kit review + own (lv_obj_class instance_size 0x30; every field from 0x14 moves +4)
     lv_obj_size: 0x30,
+    // source: own + emu (gdb): the list layout stores the entry index at +0x10 right after lv_obj_create and the
+    // click callback reads it back; at runtime the 28 rows hold 0..0x1D (hidden entries skipped)
     lv_obj_user_data: 0x10,
     lv_obj_coords: 0x18,
     lv_obj_y1: 0x1C,
@@ -1031,7 +1055,8 @@ pub const WP3: Model = Model {
     fs_opendir: 0x1011_6FE1,
     fs_readdir: 0x1011_7081,
     fs_closedir: 0x1011_6D71,
-    // source: upstream (wfguard's FILE_SIZE 0x2C runs on WP3); not re-read
+    // source: upstream + own + emu (gdb): fs_open fills +0 filep, +4 mp, +8 flags, strncpy(+9, path, 0x20) and
+    // the terminator at +0x28; a breakpoint after it shows the next word untouched
     fs_file: 0x2C,
     // source: hunt + own (fs_readdir's last store is +0x108)
     fs_dirent: 0x10C,
@@ -1053,7 +1078,7 @@ pub const WP3: Model = Model {
     // source: hunt
     utc_to_rtc: Some(0x101D_0CBF),
     utc_zone_offset: Some(0x100B_3CED),
-    // source: hunt (no zone bytes; device pointer at +0x24)
+    // source: hunt + emu (gdb): rtc_app +0x24 = 0x10201708, a device named "RTC_0" (no zone bytes)
     rtc_app: 0x2FF9_C180,
     rtc_app_device: 0x24,
     // source: map
@@ -1092,10 +1117,13 @@ pub const WP3: Model = Model {
     prop_volume: 0x57,
     prop_gps_mode: 0x6A,
     prop_return_timeout: 0xA7,
-    // TODO(M3): HR cells are map-derived guesses (0x38064D9E / A1 / A2); verify in the emulator
-    hr_wear: None,
-    hr_owner: None,
-    hr_bpm: None,
+    // source: own + emu (gdb watchpoints, `o 2` + `h 1 72 98`, heart view): the ux2sys 0x13 getter reads the bool at
+    // 0x2FF9BFB8 (0 -> 1 when worn). The map's 0x38064D9E..A2 guesses were off: the prop 2 setter writes the owner
+    // at 0x38064DA2 (1 on, 0 off; a workout start sets 2), and the bpm byte 0x38064DA3 is cleared by 0x100DCC31 at
+    // HR start and set by hr_callback (61, 60 seen)
+    hr_wear: Some(0x2FF9_BFB8),
+    hr_owner: Some(0x3806_4DA2),
+    hr_bpm: Some(0x3806_4DA3),
     // source: hunt: not found (GPS service rewritten)
     gps_state: None,
     // TODO(M3): hunt candidate 0x38020C68 with a different layout (0xA8 B, lat +0x68)
@@ -1188,7 +1216,8 @@ mod tests {
                 assert!(id > m.stock_view_id_max && id <= 0xFFFF, "{} view {id:#x}", m.name);
             }
         }
-        // 2.3: stock WP3 uses 0xF0..0x117; the wake-lock ids 0x119 and 0x136+ are taken
+        // 2.3: stock WP3 uses views 0xF0..0x117. Emulator recon: msgbox ids 0x118..0x146 share the wake-lock id
+        // space (<= 0x150); BTCALL 0x119 and AOD 0x136 are the ones stock locks by constant (WP3 note on menu_view)
         for id in stub_views(&WP3) {
             assert!(!(0xF0..=0x117).contains(&id) && id != 0x119 && id < 0x136, "{id:#x}");
         }
@@ -1284,9 +1313,41 @@ mod tests {
     #[test]
     fn unknowns_are_explicit() {
         let f = fields(&WP3);
-        for name in ["lv_arc_get_value", "aod_msgbox", "key_back", "view_msg_key", "rtc_get_time", "gps_state"] {
+        for name in ["lv_arc_get_value", "rtc_get_time", "gps_state", "gps_info", "wgt_free_id", "sport1_scene"] {
             assert_eq!(f[name].1, Val::Unknown, "{name}");
         }
+    }
+
+    #[test]
+    fn view_messages_and_keys() {
+        for m in MODELS {
+            let msgs = [m.view_msg_preload, m.view_msg_layout, m.view_msg_delete, m.view_msg_focus,
+                m.view_msg_defocus, m.view_msg_key, m.view_msg_suspend, m.view_msg_wake];
+            let mut ids: Vec<u32> = msgs.iter().map(|v| v.unwrap()).collect();
+            assert_eq!(&ids[..6], [2, 3, 4, 7, 8, 0xD], "{}", m.name);
+            ids.sort();
+            ids.dedup();
+            assert_eq!(ids.len(), msgs.len(), "{}", m.name);
+            // posted messages (suspend, wake) have bit 7 set: ui_service forwards those to the view
+            assert!(m.view_msg_suspend.unwrap() & 0x80 != 0 && m.view_msg_wake == m.view_msg_suspend.map(|s| s + 1));
+            assert_eq!(m.key_crown_press, Some(0x0400_0001), "{}", m.name);
+            assert_eq!(m.key_back, Some(0x71), "{}", m.name);
+            assert_ne!(m.key_crown_cw, m.key_crown_ccw);
+        }
+        assert_eq!((WP3.view_msg_suspend, WP3.view_msg_wake), (Some(0xCA), Some(0xCB)));
+        assert_eq!((WP3.key_crown_cw, WP3.key_crown_ccw), (Some(0x1E), Some(0x1F)));
+    }
+
+    #[test]
+    fn wp3_recon_ids() {
+        // msgbox ids start right after the last view id; AOD is in range, below the wake-lock bound 0x150
+        let aod = WP3.aod_msgbox.unwrap();
+        assert!(aod > WP3.stock_view_id_max && aod <= 0x150);
+        assert_eq!(aod, 0x136);
+        assert_eq!(WP3.app_thread_prio, WP2.app_thread_prio);
+        assert_eq!(WP3.applist_view_data, WP2.applist_view_data);
+        assert_eq!(WP3.hr_bpm, WP3.hr_owner.map(|o| o + 1));
+        assert_eq!(WP2.hr_bpm, WP2.hr_owner.map(|o| o + 1));
     }
 
     pub(super) fn json() -> String {
