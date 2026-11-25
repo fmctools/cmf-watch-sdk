@@ -65,6 +65,7 @@ class Image:
         self.end = VBASE + len(data)
         self._words = None
         self._branches = None
+        self._pc_loads = None
 
     def has(self, addr, n=1):
         return VBASE <= addr and addr + n <= self.end
@@ -163,8 +164,8 @@ class Verifier:
         digest = hashlib.sha256(img.data).hexdigest()
         self.check("stock_sha256_prefix", digest.startswith(m.stock_sha256_prefix), f"sha256 {digest[:16]}")
         self.ok("name", "model key")
-        for check in (self.boot, self.views, self.ble, self.cards, self.applist, self.lvgl, self.fs, self.ux2sys,
-                      self.strings, self.misc):
+        for check in (self.boot, self.views, self.view_messages, self.ble, self.cards, self.applist, self.lvgl,
+                      self.fs, self.ux2sys, self.strings, self.popups, self.misc):
             check()
         self.generic()
         return self.results
@@ -248,6 +249,44 @@ class Verifier:
         for f in ("menu_view", "page_view_base"):
             self.check(f, not clash, "clear of every stock view id" if not clash else f"collides {clash}")
 
+    # -- view messages (proc records, view_layout, posted messages)
+    def view_messages(self):
+        m, img = self.m, self.img
+        # a word-1 (proc-style) stock record whose proc compares r1 with preload, layout and delete
+        want = {m.view_msg_preload, m.view_msg_layout, m.view_msg_delete}
+        procs = [img.u32(r + 4) for r in range(m.view_table, m.view_table_end, m.view_record) if img.u32(r + 4)]
+        hit = next((p for p in procs if None not in want and
+                    want <= {h & 0xFF for _, h in img.halfwords(p, 0x30) if h & 0xFF00 == 0x2900}), None)
+        for f in ("view_msg_preload", "view_msg_layout", "view_msg_delete"):
+            if getattr(m, f) is not None:
+                self.check(f, hit is not None, f"proc {hit:#x} compares r1 with each" if hit else
+                           "no stock proc record compares r1 with preload, layout and delete")
+        # view_layout: movs r3, #0 ; movs r1, #layout ; mov r2, r3 ; b.w post_core
+        lay = m.view_layout & ~1
+        core = img.bl(lay + 6)
+        shape = [img.u16(lay + i) for i in (0, 2, 4)] == [0x2300, 0x2100 | (m.view_msg_layout or 0), 0x461A]
+        self.check("view_layout", shape and core is not None, "posts the layout message")
+        if m.view_msg_layout is not None:
+            self.check("view_msg_layout", shape, "view_layout posts it")
+        # suspend / wake: `movs r1, #msg` then a call of view_post (`movs r3, #0 ; b.w post_core`)
+        if core is None or m.view_msg_suspend is None:
+            return
+        hw = struct.unpack(f"<{len(img.data) // 2}H", img.data[:len(img.data) & ~1])
+
+        def posted(msg):
+            for i in range(len(hw) - 4):
+                if hw[i] != 0x2100 | msg:
+                    continue
+                for j in (1, 2, 3):
+                    f = decode_branch(hw[i + j], hw[i + j + 1], VBASE + 2 * (i + j))
+                    if f and img.has(f, 6) and img.u16(f) == 0x2300 and img.bl(f + 2) == core:
+                        return f
+            return None
+
+        for f in ("view_msg_suspend", "view_msg_wake"):
+            post = posted(getattr(m, f))
+            self.check(f, post is not None, f"`movs r1, #{getattr(m, f):#x}` then view_post {post and hex(post)}")
+
     # -- BLE dispatcher
     def ble(self):
         m, img = self.m, self.img
@@ -325,6 +364,24 @@ class Verifier:
             held = img.u32(slot)
             expect = {ops + 4: getattr(m, lay_f), ops + 8: getattr(m, upd_f)}.get(slot)
             self.check(slot_f, expect is not None and held == expect, f"holds stock {held:#x}")
+        # the list layout: view data through the view pointer (r0 or a copy), label style and font as add immediates
+        # (line height = the font's +8), each row's user data right after lv_obj_create
+        hws = img.halfwords(m.applist_layout, 0x40)
+        alias = {0} | {h & 7 for _, h in hws if h & 0xFF78 == 0x4600 and not h & 0x80}
+        loads = {(h >> 6 & 0x1F) * 4 for _, h in hws if h & 0xF800 == 0x6800 and h >> 3 & 7 in alias}
+        loads |= {(b & 0xFF) * 4 + 4 for (_, a), (_, b) in zip(hws, hws[1:]) if a == 0xE9D0}
+        if m.applist_view_data is not None:
+            self.check("applist_view_data", m.applist_view_data in loads,
+                       f"layout loads view +{[hex(x) for x in sorted(loads)]}")
+        adds = add_immediates(hws)
+        self.check("applist_data_label_style", m.applist_data_label_style in adds,
+                   f"layout adds {[hex(x) for x in sorted(adds)]}")
+        self.check("applist_data_line_h", m.applist_data_line_h - 8 in adds, "font struct (line_height at +8)")
+        rows = img.halfwords(m.applist_layout, 0x300)
+        ud = {(h >> 6 & 0x1F) * 4 for i, (a, _) in enumerate(rows[:-1]) if img.bl(a) == m.lv_obj_create & ~1
+              for _, h in rows[i + 2:i + 6] if h & 0xF800 == 0x6000 and h >> 3 & 7 == 0}
+        self.check("lv_obj_user_data", m.lv_obj_user_data in ud,
+                   f"row = lv_obj_create(); str [r0, #{[hex(x) for x in sorted(ud)]}]")
 
     # -- LVGL struct offsets
     def lvgl(self):
@@ -376,6 +433,11 @@ class Verifier:
         stores = [b & 0xFFF for a, b in zip(hws, hws[1:]) if a == 0xF8C4]
         top = max(stores) + 4 if stores else None
         self.check("fs_dirent", top == m.fs_dirent, f"fs_readdir's last store ends at {top and hex(top)}")
+        # fs_open copies the path to +9 (0x20 bytes) and terminates it with `strb.w r3, [r5, #0x28]`
+        hws = [h for _, h in img.halfwords(m.fs_open, 0x100)]
+        stores = [b & 0xFFF for a, b in zip(hws, hws[1:]) if a & 0xFFF0 == 0xF880]
+        end = (max(stores) + 4) & ~3 if stores else None
+        self.check("fs_file", end == m.fs_file, f"fs_open's last byte store rounds up to {end and hex(end)}")
 
     # -- ux2sys properties
     def ux2sys(self):
@@ -407,6 +469,11 @@ class Verifier:
         r = row(m, img, m.cards_prop)
         if r:
             self.check("cards_bytes", r[2] == m.cards_bytes, f"cards property length {r[2]}")
+        # the HR mode setter (property prop_hr_mode) records the owner
+        if m.hr_owner is not None:
+            setter = struct.unpack_from("<I", img.data, m.ux2sys_table + 12 * m.prop_hr_mode - VBASE)[0]
+            lits = {img.u32(a) for a, _ in img.halfwords(setter, 0x80) if a % 4 == 0}
+            self.check("hr_owner", m.hr_owner in lits, "literal of the HR mode setter")
 
     # -- strings
     def strings(self):
@@ -415,6 +482,28 @@ class Verifier:
                         ("font_sans", "/sans")):
             s = img.cstr(getattr(m, f))
             self.check(f, want in s and s.startswith("/NAND:"), repr(s))
+
+    # -- popup state and the AOD msgbox
+    def popups(self):
+        m, img = self.m, self.img
+        if m.aod_msgbox is None:
+            return
+        # update_msgbox_info: `ldr r4, =popup state` (flags at +0x34) and `cmp.w r0, #aod` (the second slot)
+        base = m.popup_flags - 0x34
+        hit = None
+        for at, h in pc_loads(img):
+            if img.u32(((at + 4) & ~3) + (h & 0xFF) * 4) != base:
+                continue
+            near = [x for _, x in img.halfwords(at - 0x10, 0x24)]
+            if any(a & 0xFBF0 == 0xF1B0 and b & 0x8F00 == 0x0F00 and t32_imm(a, b) == m.aod_msgbox
+                   for a, b in zip(near, near[1:])):
+                hit = at
+                break
+        if hit is None:
+            self.unverified("aod_msgbox", "no `cmp.w r0, #aod` next to the popup state literal on this build")
+            return
+        self.ok("aod_msgbox", f"{hit:#x} loads the popup state and compares the id with it")
+        self.ok("popup_flags", f"{hit:#x} loads popup_flags - 0x34")
 
     # -- the rest with a concrete footprint
     def misc(self):
@@ -426,6 +515,55 @@ class Verifier:
             self.check("sport1_texts", m.sport1_texts in img.words(), "referenced as a pointer")
         if m.pwm_device is not None:
             self.check("pwm_device", m.pwm_device in img.words(), "referenced as a pointer")
+        # rtc_app: the device pointer is loaded right after the literal
+        dev = ldr16(0, 0, m.rtc_app_device) & 0xFFC0
+        for at, h in pc_loads(img):
+            if img.u32(((at + 4) & ~3) + (h & 0xFF) * 4) != m.rtc_app:
+                continue
+            rd = h >> 8 & 7
+            if any(x & 0xFFC0 == dev and x >> 3 & 7 == rd for _, x in img.halfwords(at + 2, 0xE)):
+                self.ok("rtc_app_device", f"{at:#x} loads rtc_app, then +{m.rtc_app_device:#x}")
+                break
+
+
+def t32_imm(h1, h2):
+    """Modified immediate of a T32 data-processing instruction (ThumbExpandImm); None for the replicated forms."""
+    imm12 = (h1 >> 10 & 1) << 11 | (h2 >> 12 & 7) << 8 | h2 & 0xFF
+    if imm12 >> 8 == 0:
+        return imm12
+    if imm12 >> 10 == 0:
+        return None
+    rot, v = imm12 >> 7, 0x80 | imm12 & 0x7F
+    return (v << (32 - rot) | v >> rot) & 0xFFFFFFFF
+
+
+def add_immediates(hws):
+    """Immediates of `add.w` (T3) and `addw` (T4) in a list of (addr, halfword)."""
+    out = set()
+    for (_, h1), (_, h2) in zip(hws, hws[1:]):
+        if h2 & 0x8000:
+            continue
+        if h1 & 0xFBE0 == 0xF100:
+            v = t32_imm(h1, h2)
+            if v is not None:
+                out.add(v)
+        elif h1 & 0xFBF0 == 0xF200:
+            out.add((h1 >> 10 & 1) << 11 | (h2 >> 12 & 7) << 8 | h2 & 0xFF)
+    return out
+
+
+def pc_loads(img):
+    """Every 16-bit `ldr rX, [pc, #imm]` (addr, halfword) whose literal lies in the image."""
+    if img._pc_loads is None:
+        hw = struct.unpack(f"<{len(img.data) // 2}H", img.data[:len(img.data) & ~1])
+        out = []
+        for i, h in enumerate(hw):
+            if h & 0xF800 == 0x4800:
+                at = VBASE + 2 * i
+                if img.has(((at + 4) & ~3) + (h & 0xFF) * 4, 4):
+                    out.append((at, h))
+        img._pc_loads = out
+    return img._pc_loads
 
 
 def movw_imm(imm, rd):
@@ -534,6 +672,13 @@ class Wp3StockTest(StockImageMixin, unittest.TestCase):
 
     def test_dnd_and_grid_verified(self):
         for f in ("dnd_opcode", "dnd_handler", "applist_grid_hook_slot", "wgt_reg_literal"):
+            self.assertEqual(self.results[f][0], "verified", f"{f}: {self.results[f]}")
+
+    def test_emulator_recon_has_a_static_footprint(self):
+        # values found with gdb in the emulator that the image also shows
+        for f in ("view_msg_preload", "view_msg_layout", "view_msg_delete", "view_msg_suspend", "view_msg_wake",
+                  "aod_msgbox", "popup_flags", "fs_file", "lv_obj_user_data", "applist_view_data",
+                  "applist_data_label_style", "applist_data_line_h", "rtc_app_device", "hr_owner"):
             self.assertEqual(self.results[f][0], "verified", f"{f}: {self.results[f]}")
 
 
