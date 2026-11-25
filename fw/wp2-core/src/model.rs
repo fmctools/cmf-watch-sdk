@@ -104,6 +104,8 @@ macro_rules! model {
 model! {
     // --- identity and image (PLAN.md 1.1)
     name: &'static str = Text,
+    /// the model byte a stub reports after its version (INFO 0xFE): 1 = Watch Pro 2 (its stub sends none), 2 = 3 Pro
+    model_id: u32 = Val,
     /// first 16 hex digits of the stock app.bin sha256
     stock_sha256_prefix: &'static str = Text,
     /// length of the stock app.bin = offset of the stub
@@ -451,6 +453,7 @@ model! {
 /// CMF Watch Pro 2, JX402 1.0.0.73.
 pub const WP2: Model = Model {
     name: "wp2",
+    model_id: 1,
     // mirrors firmware.py STOCK_SHA256_PREFIX, STUB_OFFSET
     stock_sha256_prefix: "30e7978c39d8fb79",
     app_size: 0x25_A080,
@@ -760,6 +763,8 @@ pub const WP2: Model = Model {
 /// Watch 3 Pro, jx402_08 1.0.1.77 (PLAN.md section 1; H and M rows only).
 pub const WP3: Model = Model {
     name: "wp3",
+    // plan: StubVersion reply byte 6 (fw/wp3-stub ble.rs)
+    model_id: 2,
     // source: upstream firmware.py WP3_STOCK_SHA256_PREFIX, WP3_STUB_OFFSET
     stock_sha256_prefix: "815a21fc80aa3941",
     app_size: 0x2B_D280,

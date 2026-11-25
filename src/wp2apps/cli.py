@@ -225,7 +225,8 @@ def cmd_list(args):
         return stub, await install.listing(s, install.slots(stub))
 
     stub, found = asyncio.run(with_watch(args, both))
-    print(json.dumps({"stub": {"version": stub.version, "abi_minor": stub.abi_minor}, "slots": {slot_name(n): {"name": h.name, "version": h.version, "kind": h.kind,
+    print(json.dumps({"stub": {"version": stub.version, "abi_minor": stub.abi_minor,
+                               "model": install.MODEL_NAMES[stub.model]}, "slots": {slot_name(n): {"name": h.name, "version": h.version, "kind": h.kind,
                                                "abi_minor": h.abi_minor, "icon": h.icon}
                                 for n, h in found.items()}}))
 

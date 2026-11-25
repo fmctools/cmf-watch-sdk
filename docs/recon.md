@@ -845,6 +845,14 @@ appends `{name, proc, 0, u16 0x147, 0x102, 466, 466}` and repoints `0x101A1304`/
 pages will be 0x151 and up, above the wake bound 0x150 (wp2-core `model.rs`, `menu_view`). Every address the stub
 uses comes from `model::WP3`.
 
+Header version 3 adds the install channel: a boot hook at `bl stock_heap_init` (`0x1019C646`; StubRam = the top
+4 KiB of the ResFbHeap, whose size literals `0x1019C654`/`0x1019C700`/`0x1019C76C` go from `0x636B00` to `0x635B00`,
+StubRam at `0x3871ECC0`) and a hook at `bl read_payload` in the BLE dispatcher's default branch (`0x100C253A`,
+frame in r4). The protocol is the WP2 one with two differences: DATA is `0x90A9` (the stock dispatcher sends
+`0x90A2` to its Do Not Disturb handler `0x100CD7EC`, never to the default branch), and the StubVersion reply has a
+seventh byte, the model (2; a WP2 stub sends 6 bytes, which hosts read as model 1). `wp2apps` picks DATA from that
+byte. No loader yet: MSG and PUSH answer NO_APP.
+
 | Item | WP2 1.0.0.73 | Watch 3 Pro 1.0.1.77 |
 |---|---|---|
 | `WFManager_Init` | `0x100DE020` | `0x100D6DAC` |

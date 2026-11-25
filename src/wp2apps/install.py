@@ -13,6 +13,11 @@ SLOTS_OLD = 8
 LOADER_SLOT = 0xFF
 STUB_SLOT = 0xFE  # INFO for it: the stub's version (docs/abi-1.4.md, "Stub version")
 INFO, BEGIN, DATA, END, DELETE = 0x90A0, 0x90A1, 0x90A2, 0x90A3, 0x90A4
+# the stub's model byte (StubVersion reply byte 6; a Watch Pro 2 stub sends none) and its DATA opcode: the Watch 3
+# Pro's stock firmware handles 0x90A2 itself (Do Not Disturb sync), so its stub takes DATA on 0x90A9
+MODEL_WP2, MODEL_WP3 = 1, 2
+DATA_OPCODES = {MODEL_WP2: DATA, MODEL_WP3: 0x90A9}
+MODEL_NAMES = {MODEL_WP2: "wp2", MODEL_WP3: "wp3"}
 PUSH, PUSH_WIDGET, PUSH_BLOB = 0x90A8, 0, 1  # stub 8, docs/widget-push.md
 
 
@@ -75,6 +80,11 @@ async def info(s, slot: int) -> Header | None:
 class Stub:
     version: int  # 1: a stub from before the version was readable
     abi_minor: int | None  # the highest package abi_minor it takes, None when it doesn't say
+    model: int = MODEL_WP2  # MODEL_WP3 when the reply carries that model byte
+
+    @property
+    def data_opcode(self) -> int:
+        return DATA_OPCODES[self.model]
 
 
 async def stub(s) -> Stub:
@@ -82,9 +92,9 @@ async def stub(s) -> Stub:
     reply = await s.request(SYSTEM, INFO, bytes([STUB_SLOT]), INFO | 0xA000)
     if reply[:1] == bytes([Status.BAD_REQUEST]):
         return Stub(1, None)
-    if len(reply) != 6 or reply[0] != Status.OK:
+    if len(reply) not in (6, 7) or reply[0] != Status.OK or len(reply) == 7 and reply[6] not in DATA_OPCODES:
         raise ValueError(f"unexpected stub version reply {reply.hex()}")
-    return Stub(struct.unpack_from("<I", reply, 1)[0], reply[5])
+    return Stub(struct.unpack_from("<I", reply, 1)[0], reply[5], reply[6] if len(reply) == 7 else MODEL_WP2)
 
 
 def slots(stub: Stub) -> int:
@@ -109,7 +119,7 @@ async def install(s, data: bytes, slot: int | None = None) -> int:
         raise ValueError("a loader package goes to slot L")
     if pkg.kind != package.KIND_LOADER and slot == LOADER_SLOT:
         raise ValueError("slot L takes only the loader package")
-    st = await stub(s) if pkg.kind == package.KIND_APP else None
+    st = await stub(s)
     if pkg.widget_icons and st.version < package.STUB_TRAILER:
         data = package.strip_trailer(data)  # an older stub refuses the extra bytes; it draws no icons anyway
     if pkg.kind == package.KIND_LOADER:
@@ -122,14 +132,15 @@ async def install(s, data: bytes, slot: int | None = None) -> int:
         if not same and not free:
             raise ValueError("no free slot")
         slot = (same or free)[0]
-    await upload(s, slot, data)
+    await upload(s, slot, data, st.data_opcode)
     return slot
 
 
-async def upload(s, slot: int, data: bytes) -> None:
+async def upload(s, slot: int, data: bytes, data_opcode: int = DATA) -> None:
+    """data_opcode: the stub's (Stub.data_opcode); DATA for a Watch Pro 2 stub."""
     await _call(s, BEGIN, struct.pack("<BII", slot, len(data), zlib.crc32(data)))
     for offset, part in chunks(data):
-        reply = await _call(s, DATA, struct.pack("<I", offset) + part)
+        reply = await _call(s, data_opcode, struct.pack("<I", offset) + part)
         if struct.unpack("<I", reply)[0] != offset + len(part):
             raise ValueError(f"watch expects offset {struct.unpack('<I', reply)[0]}, sent {offset + len(part)}")
     await _call(s, END, b"\0")

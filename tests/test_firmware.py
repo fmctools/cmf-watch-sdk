@@ -61,6 +61,10 @@ def wp3_stub_v2(hooks=WP3_HOOKS, name=WP3_NAME, size=0x100):
     return b"WP3S" + struct.pack("<10I", 2, *hooks, name) + bytes(size)
 
 
+def wp3_stub_v3(boot=0x102BD2E5, ble=0x102BD2F1, size=0x100):
+    return b"WP3S" + struct.pack("<12I", 3, *WP3_HOOKS, WP3_NAME, boot, ble) + bytes(size)
+
+
 def wp3_synthetic_app():
     """Zeros with the stock values at every site add_stub_wp3 checks, and a recognisable view table."""
     app = bytearray(firmware.WP3_STUB_OFFSET)
@@ -397,6 +401,64 @@ class FirmwareTest(unittest.TestCase):
                    *(slot for slot, _ in firmware.WP3_APPLIST)):
             sites.update(range(at - 0x10000000, at - 0x10000000 + 4))
         self.assertLessEqual({i for i in range(len(app)) if out[i] != app[i]}, sites)
+
+    def test_wp3_v3_adds_boot_ble_and_heap(self):
+        app = wp3_synthetic_app()
+        for lit in firmware.WP3_HEAP_LITERALS:
+            struct.pack_into("<I", app, lit - 0x10000000, firmware.WP3_HEAP_OLD)
+        for at, target in ((firmware.WP3_BOOT_CALL, firmware.WP3_STOCK_HEAP_INIT),
+                           (firmware.WP3_BLE_CALL, firmware.WP3_STOCK_BLE_READ)):
+            app[at - 0x10000000:at - 0x10000000 + 4] = firmware.thumb_bl(at, target)
+        boot, ble = 0x102BD2E5, 0x102BD2F1
+        out = bytearray(app)
+        stub = wp3_stub_v3(boot=boot, ble=ble)
+        firmware.add_stub_wp3(out, stub)
+        for lit in firmware.WP3_HEAP_LITERALS:
+            self.assertEqual(struct.unpack_from("<I", out, lit - 0x10000000)[0], 0x635B00, hex(lit))
+        self.assertEqual(firmware.WP3_HEAP_OLD - firmware.WP3_HEAP_NEW, 0x1000)
+        o = firmware.WP3_BOOT_CALL - 0x10000000
+        self.assertEqual(out[o:o + 4], firmware.thumb_bl(firmware.WP3_BOOT_CALL, boot & ~1))
+        o = firmware.WP3_BLE_CALL - 0x10000000
+        self.assertEqual(out[o:o + 4], firmware.thumb_bl(firmware.WP3_BLE_CALL, ble & ~1))
+        # everything version 2 does still happens
+        for (slot, _), hook in zip(firmware.WP3_APPLIST, WP3_HOOKS[5:7]):
+            self.assertEqual(struct.unpack_from("<I", out, slot - 0x10000000)[0], hook, hex(slot))
+        self.assertEqual(firmware.WP3_VIEW_RECORD.unpack(out[-20:])[3], 0x147)
+        for bad in (wp3_stub_v3(boot=boot & ~1, ble=ble), wp3_stub_v3(boot=boot, ble=0x1025A0C1)):
+            with self.assertRaisesRegex(ValueError, "stub"):
+                firmware.add_stub_wp3(bytearray(app), bad)
+        # a v3 stub needs the stock bytes at the boot and BLE calls too
+        with self.assertRaisesRegex(ValueError, "unexpected bytes"):
+            firmware.add_stub_wp3(wp3_synthetic_app(), stub)
+
+    def test_wp3_v3_constants_match_the_model(self):
+        m = MODEL_WP3
+        self.assertEqual(hexes(m["heap_literals"]), list(firmware.WP3_HEAP_LITERALS))
+        self.assertEqual(hexes(m["heap_size"]), firmware.WP3_HEAP_OLD)
+        self.assertEqual(hexes(m["heap_base"]) + firmware.WP3_HEAP_NEW, hexes(m["stub_ram"]))
+        self.assertEqual((hexes(m["boot_call"]), hexes(m["stock_heap_init"])),
+                         (firmware.WP3_BOOT_CALL, firmware.WP3_STOCK_HEAP_INIT | 1))
+        self.assertEqual((hexes(m["ble_call"]), hexes(m["read_payload"])),
+                         (firmware.WP3_BLE_CALL, firmware.WP3_STOCK_BLE_READ | 1))
+        self.assertEqual(hexes(m["model_id"]), 2)
+
+    @skipUnless(STOCK_WP3 is not None, "needs the stock jx402_08 1.0.1.77 app.bin (or WP3_STOCK_APP)")
+    def test_wp3_stock_bytes_at_every_v3_site(self):
+        m, img = MODEL_WP3, STOCK_WP3
+        for lit in hexes(m["heap_literals"]):
+            self.assertEqual(struct.unpack_from("<I", img, lit - 0x10000000)[0], hexes(m["heap_size"]), hex(lit))
+        for site, target in ((m["boot_call"], m["stock_heap_init"]), (m["ble_call"], m["read_payload"])):
+            at = hexes(site)
+            self.assertEqual(img[at - 0x10000000:at - 0x10000000 + 4], firmware.thumb_bl(at, hexes(target) & ~1))
+        out = firmware.patch_wp3(img, wp3_stub_v3())
+        firmware.check_acth(out)
+        changed = firmware.changed_ranges(img, out[:len(img)])
+        sites = [0x18, *(a - 0x10000000 for a, _, _ in firmware.GUARD_WP3)]
+        sites += [a - 0x10000000 for a in (*firmware.WP3_HEAP_LITERALS, firmware.WP3_BOOT_CALL, firmware.WP3_BLE_CALL,
+                                           *firmware.WP3_VIEW_START_LITERALS, *firmware.WP3_VIEW_END_LITERALS,
+                                           *(slot for slot, _ in firmware.WP3_APPLIST))]
+        for a, b in changed:
+            self.assertTrue(any(s <= a < s + 16 or a <= s < b for s in sites), f"unexpected change at {a:#x}")
 
     def test_wp3_v1_leaves_applist_and_views(self):
         app = wp3_synthetic_app()

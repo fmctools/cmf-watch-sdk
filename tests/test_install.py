@@ -20,16 +20,16 @@ class InstallChunksTest(unittest.TestCase):
 
 
 class FakeSession:
-    def __init__(self, slots=(), stub=6):
-        self.calls, self.slots, self.stub = [], dict(slots), stub
+    def __init__(self, slots=(), stub=6, model=None):
+        self.calls, self.slots, self.stub, self.model = [], dict(slots), stub, model
 
     async def request(self, c1, c2, payload, expect, timeout=6.0):
         self.calls.append((c2, payload))
         if c2 == install.INFO and payload[0] == install.STUB_SLOT:
-            return b"\0" + struct.pack("<IB", self.stub, 3)
+            return b"\0" + struct.pack("<IB", self.stub, 3) + (bytes([self.model]) if self.model else b"")
         if c2 == install.INFO:
             return b"\0" + self.slots.get(payload[0], b"")
-        if c2 == install.DATA:
+        if c2 in install.DATA_OPCODES.values():
             return b"\0" + struct.pack("<I", struct.unpack_from("<I", payload)[0] + len(payload) - 4)
         return b"\0"
 
@@ -92,6 +92,19 @@ class InstallFlowTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(await install.stub(Stub(bytes([install.Status.BAD_REQUEST]))), install.Stub(1, None))
         with self.assertRaisesRegex(ValueError, "unexpected"):
             await install.stub(Stub(b"\0\1"))
+
+    async def test_model_byte_picks_the_data_opcode(self):
+        for model, op in ((None, 0x90A2), (install.MODEL_WP2, 0x90A2), (install.MODEL_WP3, 0x90A9)):
+            for data in (sample(), sample("l", package.KIND_LOADER)):
+                s = FakeSession(stub=10, model=model)
+                await install.install(s, data)
+                sent = {c for c, _ in s.calls}
+                self.assertIn(op, sent, f"model {model}")
+                self.assertNotIn(0x90A9 if op == 0x90A2 else 0x90A2, sent, f"model {model}")
+        self.assertEqual(await install.stub(FakeSession(stub=10, model=2)), install.Stub(10, 3, install.MODEL_WP3))
+        self.assertEqual((await install.stub(FakeSession(stub=10))).data_opcode, install.DATA)
+        with self.assertRaisesRegex(ValueError, "unexpected"):
+            await install.stub(FakeSession(stub=10, model=9))
 
     async def test_info_empty_and_full(self):
         s = FakeSession({2: sample()[:64]})

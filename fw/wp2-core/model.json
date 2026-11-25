@@ -1,6 +1,7 @@
 {
   "wp2": {
     "name": {"kind": "text", "value": "wp2"},
+    "model_id": {"kind": "val", "value": "0x1"},
     "stock_sha256_prefix": {"kind": "text", "value": "30e7978c39d8fb79"},
     "app_size": {"kind": "size", "value": "0x25a080"},
     "boot_call": {"kind": "site", "value": "0x101884fa"},
@@ -261,6 +262,7 @@
   },
   "wp3": {
     "name": {"kind": "text", "value": "wp3"},
+    "model_id": {"kind": "val", "value": "0x2"},
     "stock_sha256_prefix": {"kind": "text", "value": "815a21fc80aa3941"},
     "app_size": {"kind": "size", "value": "0x2bd280"},
     "boot_call": {"kind": "site", "value": "0x1019c646"},

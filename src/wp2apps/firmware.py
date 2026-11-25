@@ -54,6 +54,16 @@ WP3_STUB_HEADER = struct.Struct("<4sI5I")
 # header version 2 (fw/wp3-stub): the guard's hooks, the app list's List and Grid update handlers, the view proc
 # and the view name of the stub's view WP3_VIEW_ID
 WP3_STUB_HEADER_V2 = struct.Struct("<4sI9I")
+# version 3 adds the boot hook (StubRam) and the install channel's hook (fw/wp3-stub ble.rs)
+WP3_STUB_HEADER_V3 = struct.Struct("<4sI11I")
+WP3_HEADERS = {1: WP3_STUB_HEADER, 2: WP3_STUB_HEADER_V2, 3: WP3_STUB_HEADER_V3}
+# ResFbHeap size in three literal slots (model.rs heap_literals); the stub's StubRam takes its top 4 KiB
+WP3_HEAP_LITERALS = (0x1019C654, 0x1019C700, 0x1019C76C)
+WP3_HEAP_OLD = 0x636B00
+WP3_HEAP_NEW = WP3_HEAP_OLD - STUB_RAM_SIZE
+WP3_BOOT_CALL, WP3_STOCK_HEAP_INIT = 0x1019C646, 0x10152F18
+# `bl read_payload` in the BLE dispatcher's default branch; the frame is in r4 there
+WP3_BLE_CALL, WP3_STOCK_BLE_READ = 0x100C253A, 0x100C0EEC
 # (rodata slot, its stock handler): the update handler (+8 after the 0xC18487B4 marker) of the List and of the Grid
 # style's view ops, in the header's order (wp2-core model.rs applist_hook_slot / applist_grid_hook_slot)
 WP3_APPLIST = ((0x10215A68, 0x10047351), (0x10215948, 0x10046D99))
@@ -329,15 +339,19 @@ def patch_wp3(app: bytes, stub: bytes) -> bytes:
 
 def add_stub_wp3(out: bytearray, stub: bytes) -> None:
     """Version 1: the guard only. Version 2: also the app-list update slots and the stub's view, whose record goes
-    into a copy of the view table after the stub (the stock literals are repointed at the copy, as on WP2)."""
+    into a copy of the view table after the stub (the stock literals are repointed at the copy, as on WP2).
+    Version 3: also the boot hook with the ResFbHeap shrunk by StubRam, and the BLE default-branch hook."""
     if len(stub) < WP3_STUB_HEADER.size:
         raise ValueError("bad stub header")
     magic, version = struct.unpack_from("<4sI", stub)
-    if magic != b"WP3S" or version not in (1, 2) or len(stub) < (WP3_STUB_HEADER_V2 if version == 2
-                                                                    else WP3_STUB_HEADER).size:
+    if magic != b"WP3S" or version not in WP3_HEADERS or len(stub) < WP3_HEADERS[version].size:
         raise ValueError("bad stub header")
-    fields = (WP3_STUB_HEADER if version == 1 else WP3_STUB_HEADER_V2).unpack_from(stub)[2:]
-    code, view_name = (fields, None) if version == 1 else (fields[:-1], fields[-1])
+    fields = WP3_HEADERS[version].unpack_from(stub)[2:]
+    if version == 1:
+        code, view_name, hooks = fields, None, ()
+    else:
+        code, view_name, hooks = fields[:8], fields[8], fields[9:]
+        code += hooks
     base = APP_VBASE + WP3_STUB_OFFSET
     if not all(p & 1 and base <= p & ~1 < base + len(stub) for p in code):
         raise ValueError("bad stub header")
@@ -368,6 +382,12 @@ def add_stub_wp3(out: bytearray, stub: bytes) -> None:
     for (slot, stock), hook in zip(WP3_APPLIST, applist):
         put(out, slot, struct.pack("<I", stock), struct.pack("<I", hook))
     put_guard(out, GUARD_WP3, guard)
+    if hooks:
+        boot, ble = hooks
+        for lit in WP3_HEAP_LITERALS:
+            put(out, lit, struct.pack("<I", WP3_HEAP_OLD), struct.pack("<I", WP3_HEAP_NEW))
+        put(out, WP3_BOOT_CALL, thumb_bl(WP3_BOOT_CALL, WP3_STOCK_HEAP_INIT), thumb_bl(WP3_BOOT_CALL, boot & ~1))
+        put(out, WP3_BLE_CALL, thumb_bl(WP3_BLE_CALL, WP3_STOCK_BLE_READ), thumb_bl(WP3_BLE_CALL, ble & ~1))
 
 
 def changed_ranges(old: bytes, new: bytes, gap: int = 16) -> list[tuple[int, int]]:
