@@ -18,6 +18,14 @@ if [ "$loader" = 1 ]; then
     rm -f target/loader.wp2app
     uv run --locked wp2apps pack target/loader.bin --elf "$out/wp2-loader" --kind loader --name loader \
         --version "${WP2_LOADER_VERSION:-1}" --output target/loader.wp2app
+    # the Watch 3 Pro loader: the same crate with its own feature, in its own invocation and target dir (a feature of
+    # the loader only, so the stubs above never see it)
+    (cd "$root/fw" && cargo build --release -p wp2-loader --features wp3 --target-dir target/wp3)
+    out3=$root/fw/target/wp3/thumbv7em-none-eabi/release
+    llvm-objcopy -O binary --set-section-flags .data=alloc,load,contents "$out3/wp2-loader" target/loader-wp3.bin
+    rm -f target/loader-wp3.wp2app
+    uv run --locked wp2apps pack target/loader-wp3.bin --elf "$out3/wp2-loader" --kind loader --model wp3 \
+        --name loader --version "${WP2_LOADER_VERSION:-1}" --output target/loader-wp3.wp2app
 fi
 rm -f target/app-wp2.bin
 uv run --locked wp2apps firmware --stub target/wp2-stub.bin --output target/app-wp2.bin

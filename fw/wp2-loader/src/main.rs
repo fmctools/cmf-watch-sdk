@@ -21,7 +21,7 @@ mod media;
 mod music;
 mod menu;
 #[cfg(target_os = "none")]
-mod motor;
+mod motor; #[cfg(target_os = "none")] mod plat;
 #[cfg(target_os = "none")]
 mod storage;
 #[cfg(target_os = "none")]
@@ -35,9 +35,9 @@ mod view {
     use core::ffi::c_void;
     use core::ptr::addr_of_mut;
     use core::sync::atomic::Ordering;
-    use wp2_core::events::{escape_due, map_key, Event, BUTTON, CROWN, TOUCH_DOWN, TOUCH_UP};
+    use crate::plat::map_key; use wp2_core::events::{escape_due, Event, BUTTON, CROWN, TOUCH_DOWN, TOUCH_UP};
     use wp2_core::pkg::{F_PAGE, F_WIDGET};
-    use wp2_core::stock::KEY_BACK;
+    use crate::plat::stock::KEY_BACK;
 
     const PRELOAD: u32 = 2;
     const LAYOUT: u32 = 3;
@@ -46,8 +46,8 @@ mod view {
     const DEFOCUS: u32 = 8;
     const KEY: u32 = 0xD;
     // the launcher's early-suspend / late-resume to the top view (docs/recon.md, "Screen-off and the app view")
-    const SUSPEND: u32 = 0x82;
-    const WAKE: u32 = 0x83;
+    use crate::plat::view::SUSPEND; // WP2 0x82, Watch 3 Pro 0xCA
+    use crate::plat::view::WAKE; // WP2 0x83, Watch 3 Pro 0xCB
     // a key this soon after WAKE is the one that woke the panel (AOD exit passes it on to the view)
     const WAKE_KEY_MS: u32 = 1500;
     const ERROR_MS: u32 = 2000;
@@ -105,7 +105,7 @@ mod view {
                 m.scr = scr;
                 m.entries = menu::scan();
                 menu::lv::build(scr, &m.entries, row_cb, long_cb);
-                m.page = wp2_core::cards::page_slot(view_id);
+                m.page = crate::plat::view::page_slot(view_id);
                 app::ON_PAGE.store(m.page.is_some(), Ordering::Release);
                 match m.page {
                     Some(slot) => launch_page(m, slot),
@@ -240,7 +240,7 @@ mod view {
     // a tap on an app widget (stub card.rs) opened the view: start that slot as if its row was tapped; an
     // uninstalled slot leaves the menu
     fn launch_widget(m: &mut Menu) {
-        let want = core::mem::take(&mut wp2_core::layout::stub_ram().launch);
+        let want = core::mem::take(&mut crate::plat::stub_ram().launch);
         let Some(row) = m.entries.iter().position(|e| e.is_some_and(|e| e.slot + 1 == want)) else { return };
         m.launched = row;
         match app::launch(want - 1) {
@@ -271,16 +271,16 @@ mod view {
         }
         let m = st();
         let Some(entry) = m.entries.get(row).copied().flatten() else { return };
-        let cards = cards_now();
+        #[cfg(not(feature = "wp3"))] let cards = cards_now(); // no card list mapping on the Watch 3 Pro yet (M3)
         let mut b: [(&[u8], bool, usize); 4] = [(b"", false, 0); 4];
-        let mut n = 0;
+        #[cfg_attr(feature = "wp3", allow(unused_mut))] let mut n = 0;
         let at = |ask: u8| usize::from(ask) << 4 | row;
-        if entry.features & F_WIDGET != 0 {
+        #[cfg(not(feature = "wp3"))] if entry.features & F_WIDGET != 0 {
             let on = wp2_core::cards::has_widget(&cards, entry.slot);
             b[n] = (if on { b"Remove widget" } else { b"Add widget" }, false, at(ASK_WIDGET));
             n += 1;
         }
-        if entry.features & F_PAGE != 0 {
+        #[cfg(not(feature = "wp3"))] if entry.features & F_PAGE != 0 {
             let on = wp2_core::cards::has_page(&cards, entry.slot);
             b[n] = (if on { b"Remove page" } else { b"Add page" }, false, at(ASK_PAGE));
             n += 1;
@@ -296,16 +296,16 @@ mod view {
         (m.answer, m.asked) = ((data >> 4) as u8, data & 0xF);
     }
 
-    fn cards_now() -> wp2_core::cards::Cards {
-        unsafe { (wp2_core::stock::CARDS_STORE as *const wp2_core::cards::Cards).read_volatile() }
+    #[cfg(not(feature = "wp3"))] fn cards_now() -> wp2_core::cards::Cards {
+        unsafe { (crate::plat::stock::CARDS_STORE as *const wp2_core::cards::Cards).read_volatile() }
     }
 
     // as the phone's 0x906D set: the settings copy, then store + lay out the cards again
-    fn edit_cards(f: impl FnOnce(&mut wp2_core::cards::Cards)) {
+    #[cfg(not(feature = "wp3"))] fn edit_cards(f: impl FnOnce(&mut wp2_core::cards::Cards)) {
         let mut c = cards_now();
         f(&mut c);
-        unsafe { (wp2_core::stock::CARDS_STORE as *mut wp2_core::cards::Cards).write_volatile(c) };
-        stock!(wp2_core::stock::CARDS_SAVE, fn(u32, u32) -> u32)(0xE4, 0);
+        unsafe { (crate::plat::stock::CARDS_STORE as *mut wp2_core::cards::Cards).write_volatile(c) };
+        stock!(crate::plat::stock::CARDS_SAVE, fn(u32, u32) -> u32)(0xE4, 0);
     }
 
     // timer: the sheet's answer. Widget / page = the card list; delete = the stub's DELETE (package and data files)
@@ -317,16 +317,16 @@ mod view {
         }
         menu::lv::close_confirm();
         let Some(entry) = m.entries.get(m.asked).copied().flatten() else { return };
-        use wp2_core::{cards, fs, layout};
+        use crate::plat::fs; use wp2_core::layout; #[cfg(not(feature = "wp3"))] use wp2_core::cards;
         match answer {
             // ponytail: a full list (8 cards) just leaves it as it is
-            ASK_WIDGET => return edit_cards(|c| drop(cards::toggle_widget(c, entry.slot))),
-            ASK_PAGE => return edit_cards(|c| drop(cards::toggle_page(c, entry.slot))),
+            #[cfg(not(feature = "wp3"))] ASK_WIDGET => return edit_cards(|c| drop(cards::toggle_widget(c, entry.slot))),
+            #[cfg(not(feature = "wp3"))] ASK_PAGE => return edit_cards(|c| drop(cards::toggle_page(c, entry.slot))),
             ASK_DELETE => {}
             _ => return,
         }
-        let c = cards_now();
-        if cards::has_widget(&c, entry.slot) || cards::has_page(&c, entry.slot) {
+        #[cfg(not(feature = "wp3"))] let c = cards_now();
+        #[cfg(not(feature = "wp3"))] if cards::has_widget(&c, entry.slot) || cards::has_page(&c, entry.slot) {
             edit_cards(|c| cards::forget(c, entry.slot));
         }
         fs::unlink(&layout::slot_path(entry.slot, false));
@@ -379,7 +379,7 @@ mod view {
     // The stock exempts its own workout views from "return to watch face"; an app gets the same while it runs. Before
     // heart rate, deep sleep stopped the launcher's clock and hid the return (docs/recon.md, "Return to watch face").
     fn hold_face(on: bool) {
-        use wp2_core::stock::{RETURN_CB, RETURN_CLOCK};
+        use crate::plat::stock::{RETURN_CB, RETURN_CLOCK};
         unsafe { (RETURN_CB as *mut u32).write_volatile(if on { 0 } else { RETURN_CLOCK }) };
     }
 

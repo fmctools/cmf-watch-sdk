@@ -8,7 +8,7 @@ use core::ffi::c_void;
 use core::ptr::{addr_of_mut, null_mut};
 use wp2_core::events::{Event, LV};
 use wp2_core::lvcmd::*;
-use wp2_core::stock::*;
+use crate::plat::stock::*;
 
 type Obj = *mut c_void;
 
@@ -134,7 +134,7 @@ fn label(parent: Obj, font: usize) -> Obj {
 }
 
 /// CREATE of a Music handle (validated: none lives). The container fills its parent's 466 × 466 like the stock tile.
-pub fn create(parent: Obj, h: u16) -> Result<Obj, i32> {
+pub fn create(parent: Obj, h: u16) -> Result<Obj, i32> { #[cfg(feature = "wp3")] return Err(crate::plat::E_NODEV); // sport1 tile: M3
     let s = m();
     let lang = stock!(SCENE_LANG, fn() -> u32)();
     if stock!(SCENE_OPEN, fn(u32, *mut u32, u32, u32, u32) -> i32)(SPORT1_SCENE, s.scene.as_mut_ptr(), SCENE_STY, SCENE_RES, lang) < 0 {

@@ -6,9 +6,9 @@ use core::ffi::c_void;
 use core::ptr::{addr_of_mut, null_mut};
 use core::sync::atomic::{AtomicI32, AtomicU32, AtomicU8, Ordering};
 use wp2_core::events::{Event, CROWN, LV};
-use wp2_core::layout::stub_ram;
+use crate::plat::stub_ram;
 use wp2_core::lvcmd::{self, Class, Rec, Table, FOCUS_MAX, MAX_FONTS, MAX_OBJS, MAX_OPTIONS};
-use wp2_core::stock::*;
+use crate::plat::stock::*;
 
 type Obj = *mut c_void;
 
@@ -34,11 +34,11 @@ const LAYOUT_CHANGED: u32 = 43;
 const STATE_CHECKED: u32 = 0x01;
 // LV_DIR_TOP | LV_DIR_BOTTOM: a page scrolls the pager vertically only
 const DIR_VER: u32 = 0x0C;
-// lv_tileview_tile_t: lv_obj_t (0x2C B), then u8 dir (tile constructor 0x10138078)
-const TILE_DIR: usize = 0x2C;
-// lv_obj_t coords: i32 x1 y1 x2 y2 at +0x14 (docs/recon-lvgl.md)
-const Y1: usize = 0x18;
-const Y2: usize = 0x20;
+// lv_tileview_tile_t: lv_obj_t, then u8 dir (WP2 tile constructor 0x10138078); lv_obj_t coords i32 x1 y1 x2 y2
+// (docs/recon-lvgl.md). Per model (crate::plat::obj): lv_obj_t is 0x2C B on WP2, 0x30 on the Watch 3 Pro.
+use crate::plat::obj::TILE_DIR;
+use crate::plat::obj::Y1;
+use crate::plat::obj::Y2;
 const FONT_NAMES: [&[u8; 3]; lvcmd::FONT_FILES as usize] = [
     b"18M", b"24L", b"24M", b"24R", b"28M", b"28R", b"30R", b"32M", b"32R", b"34R", b"36L", b"36M", b"36N", b"36R",
     b"44L", b"48M",
@@ -136,7 +136,7 @@ pub extern "C" fn submit(buf: *const u8, len: usize) -> i32 {
     }
     if let Some(rec) = lvcmd::widget(unsafe { core::slice::from_raw_parts(buf, len) }) {
         // a v2 record the running stub cannot draw (or a malformed one): -22, so the app falls back to v1
-        if !wp2_core::widget::accepts(rec, wp2_core::layout::stub_ram().version()) {
+        if !wp2_core::widget::accepts(rec, crate::plat::stub_ram().version()) {
             return -22;
         }
         return crate::svc::save_widget(rec);
@@ -535,7 +535,7 @@ extern "C" fn on_event(e: *mut c_void) {
     }
     let obj = st().objs[h as usize];
     let v = match st().table.class(h) {
-        Some(Class::Arc) => stock!(LV_ARC_GET_VALUE, fn(Obj) -> i16)(obj).into(),
+        #[cfg(not(feature = "wp3"))] Some(Class::Arc) => stock!(LV_ARC_GET_VALUE, fn(Obj) -> i16)(obj).into(), #[cfg(feature = "wp3")] Some(Class::Arc) => unsafe { *((obj as usize + crate::plat::obj::ARC_VALUE) as *const i16) }.into(),
         Some(Class::Bar | Class::Slider) => stock!(LV_BAR_GET_VALUE, fn(Obj) -> i32)(obj),
         Some(Class::Roller) => stock!(LV_ROLLER_GET_SELECTED, fn(Obj) -> u16)(obj).into(),
         _ => 0,
