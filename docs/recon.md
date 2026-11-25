@@ -836,6 +836,15 @@ five hooks) holds only the guard, appended at the end of app.bin (`0x102BD280`);
 patches the sites above and fixes ACTH, `wp2apps ota-image --model wp3` (`make fw-ota-wp3`) puts it into the stock
 image. The stock data and the calls are in wp2-core `wfguard.rs` (`WP3`).
 
+Header version 2 (loader port milestone M1, prototype, emulator proof pending) adds an "Apps" entry to the stock app
+list and the stub's own view: two more hooks for the List and Grid styles' update handlers (rodata `0x10215A68`,
+`0x10215948`, stock `0x10047351` / `0x10046D99`; adapted from jimhooker's MIT `wp3-applist.patch`), then the view proc
+and the view's name. `add_stub_wp3` copies the view table (20-byte records, `0x1000050C..0x1000136C`) after the stub,
+appends `{name, proc, 0, u16 0x147, 0x102, 466, 466}` and repoints `0x101A1304`/`0x101A3194` (start) and
+`0x101A1308`/`0x101A3198` (end). View 0x147 is a free wake-lock id (msgbox ids 0x118..0x146 double as wake ids); app
+pages will be 0x151 and up, above the wake bound 0x150 (wp2-core `model.rs`, `menu_view`). Every address the stub
+uses comes from `model::WP3`.
+
 | Item | WP2 1.0.0.73 | Watch 3 Pro 1.0.1.77 |
 |---|---|---|
 | `WFManager_Init` | `0x100DE020` | `0x100D6DAC` |

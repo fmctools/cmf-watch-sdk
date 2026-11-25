@@ -48,8 +48,22 @@ STOCK_BLE_READ = 0x100CC284
 # Watch 3 Pro jx402_08 1.0.1.77 (wp2-core wfguard.rs WP3): the stub goes at the end of app.bin
 WP3_STOCK_SHA256_PREFIX = "815a21fc80aa3941"
 WP3_STUB_OFFSET = 0x2BD280
-WP3_STUB_MAX = 0x1000
+# stub and the copied view table (fw/wp3-stub/link.ld); the app partition's real size on WP3 is unmeasured
+WP3_STUB_MAX = 0x5000
 WP3_STUB_HEADER = struct.Struct("<4sI5I")
+# header version 2 (fw/wp3-stub): the guard's hooks, the app list's List and Grid update handlers, the view proc
+# and the view name of the stub's view WP3_VIEW_ID
+WP3_STUB_HEADER_V2 = struct.Struct("<4sI9I")
+# (rodata slot, its stock handler): the update handler (+8 after the 0xC18487B4 marker) of the List and of the Grid
+# style's view ops, in the header's order (wp2-core model.rs applist_hook_slot / applist_grid_hook_slot)
+WP3_APPLIST = ((0x10215A68, 0x10047351), (0x10215948, 0x10046D99))
+# 20-byte records {name, proc (word 1), 0, u16 id, u16 0x102, u16 466, u16 466} (model.rs view_*)
+WP3_VIEW_TABLE, WP3_VIEW_TABLE_END = 0x1000050C, 0x1000136C
+WP3_VIEW_START_LITERALS = (0x101A1304, 0x101A3194)
+WP3_VIEW_END_LITERALS = (0x101A1308, 0x101A3198)
+WP3_VIEW_RECORD = struct.Struct("<IIIHHHH")
+# model.rs menu_view: a free wake-lock id (0x118..0x146 are msgbox and wake ids), the loader's lock later
+WP3_VIEW_ID = 0x147
 GUARD_WP3 = (
     (0x100D6E20, 0x101D5A02, WF_BOOT),
     (0x100A5D84, 0x100D577C, WF_SAVED),
@@ -302,7 +316,8 @@ def put_guard(out: bytearray, sites: tuple, hooks: list[int]) -> None:
 
 
 def patch_wp3(app: bytes, stub: bytes) -> bytes:
-    """Watch 3 Pro: appends fw/wp3-stub (the watch face guard only) and points the GUARD_WP3 calls at it."""
+    """Watch 3 Pro: appends fw/wp3-stub and points the GUARD_WP3 calls at it; a version 2 stub also gets the
+    WP3_APPLIST slots and a view-table record for WP3_VIEW_ID (add_stub_wp3)."""
     if not hashlib.sha256(app).hexdigest().startswith(WP3_STOCK_SHA256_PREFIX):
         raise ValueError("not the stock jx402_08 1.0.1.77 app.bin (sha256 mismatch)")
     out = bytearray(app)
@@ -313,16 +328,45 @@ def patch_wp3(app: bytes, stub: bytes) -> bytes:
 
 
 def add_stub_wp3(out: bytearray, stub: bytes) -> None:
-    magic, version, *guard = WP3_STUB_HEADER.unpack_from(stub)
+    """Version 1: the guard only. Version 2: also the app-list update slots and the stub's view, whose record goes
+    into a copy of the view table after the stub (the stock literals are repointed at the copy, as on WP2)."""
+    if len(stub) < WP3_STUB_HEADER.size:
+        raise ValueError("bad stub header")
+    magic, version = struct.unpack_from("<4sI", stub)
+    if magic != b"WP3S" or version not in (1, 2) or len(stub) < (WP3_STUB_HEADER_V2 if version == 2
+                                                                    else WP3_STUB_HEADER).size:
+        raise ValueError("bad stub header")
+    fields = (WP3_STUB_HEADER if version == 1 else WP3_STUB_HEADER_V2).unpack_from(stub)[2:]
+    code, view_name = (fields, None) if version == 1 else (fields[:-1], fields[-1])
     base = APP_VBASE + WP3_STUB_OFFSET
-    if magic != b"WP3S" or version != 1 or not all(p & 1 and base <= p & ~1 < base + len(stub) for p in guard):
+    if not all(p & 1 and base <= p & ~1 < base + len(stub) for p in code):
+        raise ValueError("bad stub header")
+    if view_name is not None and not base <= view_name < base + len(stub):
         raise ValueError("bad stub header")
     if len(stub) > WP3_STUB_MAX:
         raise ValueError(f"stub takes {len(stub):#x} bytes; the limit is {WP3_STUB_MAX:#x}")
     if len(out) != WP3_STUB_OFFSET:
         raise ValueError(f"app.bin is {len(out):#x} bytes; the stub goes at {WP3_STUB_OFFSET:#x}")
+    guard = code[:5]
     out += stub
-    out += bytes(-len(out) % 4)
+    if version == 1:
+        out += bytes(-len(out) % 4)
+        put_guard(out, GUARD_WP3, guard)
+        return
+    applist, view_proc = code[5:7], code[7]
+    out += bytes(-len(out) % 8)
+    table = APP_VBASE + len(out)
+    out += out[WP3_VIEW_TABLE - APP_VBASE:WP3_VIEW_TABLE_END - APP_VBASE]
+    out += WP3_VIEW_RECORD.pack(view_name, view_proc, 0, WP3_VIEW_ID, 0x102, 466, 466)
+    if len(out) - WP3_STUB_OFFSET > WP3_STUB_MAX:
+        raise ValueError(f"stub and view table take {len(out) - WP3_STUB_OFFSET:#x} bytes; "
+                         f"the limit is {WP3_STUB_MAX:#x}")
+    for lit in WP3_VIEW_START_LITERALS:
+        put(out, lit, struct.pack("<I", WP3_VIEW_TABLE), struct.pack("<I", table))
+    for lit in WP3_VIEW_END_LITERALS:
+        put(out, lit, struct.pack("<I", WP3_VIEW_TABLE_END), struct.pack("<I", APP_VBASE + len(out)))
+    for (slot, stock), hook in zip(WP3_APPLIST, applist):
+        put(out, slot, struct.pack("<I", stock), struct.pack("<I", hook))
     put_guard(out, GUARD_WP3, guard)
 
 

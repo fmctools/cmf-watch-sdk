@@ -1,6 +1,6 @@
 /* the end of the stock jx402_08 1.0.1.77 app.bin (0x2BD280 bytes) */
 ENTRY(wp3_wf_boot)
-MEMORY { FLASH (rx) : ORIGIN = 0x102BD280, LENGTH = 0x1000 }
+MEMORY { FLASH (rx) : ORIGIN = 0x102BD280, LENGTH = 0x5000 }
 
 SECTIONS
 {

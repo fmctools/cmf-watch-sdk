@@ -627,6 +627,12 @@ class ModelJsonTest(unittest.TestCase):
 
         m = Model(MODELS["wp3"])
         self.assertEqual((m.stock_sha256_prefix, m.app_size), (fw.WP3_STOCK_SHA256_PREFIX, fw.WP3_STUB_OFFSET))
+        self.assertEqual((m.view_table, m.view_table_end), (fw.WP3_VIEW_TABLE, fw.WP3_VIEW_TABLE_END))
+        self.assertEqual(m.view_start_literals, list(fw.WP3_VIEW_START_LITERALS))
+        self.assertEqual(m.view_end_literals, list(fw.WP3_VIEW_END_LITERALS))
+        self.assertEqual((m.view_record, m.menu_view), (fw.WP3_VIEW_RECORD.size, fw.WP3_VIEW_ID))
+        self.assertEqual(fw.WP3_APPLIST, ((m.applist_hook_slot, m.applist_update),
+                                          (m.applist_grid_hook_slot, m.applist_grid_update)))
 
     def test_wp3_design_choices(self):
         m = Model(MODELS["wp3"])
@@ -634,6 +640,9 @@ class ModelJsonTest(unittest.TestCase):
         self.assertEqual((m.view_record, m.fs_ops_mkdir, m.lv_obj_size, m.ble_frame_reg, m.fs_dirent),
                          (20, 0x40, 0x30, 4, 0x10C))
         self.assertTrue(all(not 0xF0 <= v <= 0x117 for v in (m.menu_view, m.page_view_base, m.page_view_base + 15)))
+        # M1: the menu takes the free wake-lock id 0x147 (msgbox/wake ids are 0x118..0x146, bound 0x150), the
+        # pages go above the bound
+        self.assertEqual((m.menu_view, m.page_view_base), (0x147, 0x151))
 
 
 class StockImageMixin:
