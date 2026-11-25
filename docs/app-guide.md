@@ -270,6 +270,17 @@ fn rgb(r: u32, g: u32, b: u32) -> u16 {
 | Panic | the SDK handler turns the motor off and exits with `-1` (menu: `Error -1`). A CPU fault is not caught | `sdk/cmf-wp2-app/src/lib.rs` |
 | ABI | an app built with this SDK needs a 1.1 loader; on a 1.0 loader `main` never runs and the menu shows `Error -2` | `__start` in `lib.rs` |
 
+### Watch 3 Pro (port in progress)
+
+The same app package runs on the CMF Watch 3 Pro (jx402_08 1.0.1.77) under the Watch 3 Pro loader
+(`wp2-loader --features wp3`, packed with `wp2apps pack --kind loader --model wp3`; a loader for the other model is
+refused at install). Proven in the emulator with `hello`: drawing, crown and button events, exit to the menu. Not available there yet (milestone M3); these calls return `-19` (ENODEV) instead of acting:
+`motor` (haptic chip, not PWM), GPS, heart rate, phone media keys and the music tile (`Class::Music` creation
+fails). Storage inspection answers `-95`. The app has no widget card or page entry on this model yet (the
+long-press sheet offers only Delete), and `time()` comes from the UTC clock plus the watch's zone, so
+`utc_offset_min` is a real offset; `millis` is 0. LVGL apps work with the stock font on `/NAND:B` only after M3
+maps the font table.
+
 ### What is slow
 
 - `rect` and `text` write straight into the PSRAM framebuffer; `show` copies nothing. It publishes the bounding box

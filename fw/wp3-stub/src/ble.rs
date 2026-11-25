@@ -3,8 +3,9 @@
 // - DATA is `data_opcode` (0x90A9): stock 1.0.1.77 handles 0x90A2 itself (Do Not Disturb sync, `dnd_handler`) and
 //   never sends it down the default branch this hook sits in;
 // - the StubVersion reply carries a model byte after the WP2 fields (`MODEL_ID`), which a host reads to pick DATA;
-// - M1 subset: INFO, StubVersion, BEGIN, DATA, END (full package check), DELETE and PING. There is no loader yet:
-//   MSG and PUSH answer NoApp, nothing is queued for the host (no EVENT drain, no kick), no widget cards to forget.
+// - a loader package must carry this model in header byte 0x38 (wp2-core port.rs; END answers Invalid otherwise);
+// - subset: INFO, StubVersion, BEGIN, DATA, END (full package check), DELETE and PING. MSG and PUSH answer NoApp,
+//   nothing is queued for the host (no EVENT drain, no kick) and there are no widget cards to forget: milestone M3.
 // Kept apart from the WP2 stub so that one stays byte-identical; the shared parts are wp2-core's proto, pkg, aes and
 // widget code. Every stock address comes from model::WP3.
 use crate::fs::{self, File};
@@ -17,6 +18,7 @@ use wp2_core::layout::{
 };
 use wp2_core::model::WP3 as M;
 use wp2_core::pkg::{check_slot, crc32, file_size, parse_header, HEADER_SIZE, KIND_APP};
+use wp2_core::port::loader_model_ok;
 use wp2_core::proto::{parse, Request, Status, DATA, MAX_DATA};
 use wp2_core::widget::{trailer_head, trailer_len, TRAILER_HEAD};
 
@@ -150,6 +152,12 @@ fn status(out: &mut [u8], s: Status) -> usize {
     1
 }
 
+// the package of the loader or of the running app is in use (DELETE refuses then; an install replaces the files, the
+// running copies live in RES heap blocks)
+fn busy(ram: &StubRam, slot: u8) -> bool {
+    if slot == LOADER_SLOT { ram.loader_active != 0 } else { slot == ram.running_slot }
+}
+
 fn handle(ram: &mut StubRam, c2: u16, payload: &[u8], out: &mut [u8; MAX_REPLY]) -> usize {
     use wp2_core::proto::{DELETE, INFO};
     if c2 == INFO || c2 == DELETE {
@@ -175,7 +183,9 @@ fn handle(ram: &mut StubRam, c2: u16, payload: &[u8], out: &mut [u8; MAX_REPLY])
         }
         Ok(Request::End) => status(out, end(ram)),
         Ok(Request::Delete(slot)) => {
-            let s = if fs::unlink(&slot_path(slot, false)) < 0 {
+            let s = if busy(ram, slot) {
+                Status::Busy
+            } else if fs::unlink(&slot_path(slot, false)) < 0 {
                 Status::Io
             } else {
                 drop_data(slot);
@@ -219,6 +229,10 @@ fn abort(ram: &mut StubRam) {
 }
 
 fn begin(ram: &mut StubRam, slot: u8, size: u32, crc: u32) -> Status {
+    // the running app's package (the menu, from which the loader is replaced, is fine: it reloads on its next FOCUS)
+    if slot != LOADER_SLOT && busy(ram, slot) {
+        return Status::Busy;
+    }
     let limit = if slot == LOADER_SLOT { LOADER_SIZE } else { APP_SIZE };
     if (size as usize) < HEADER_SIZE || size > HEADER_SIZE as u32 + 2 * limit {
         return Status::BadRequest;
@@ -275,6 +289,8 @@ fn end(ram: &mut StubRam) -> Status {
     };
     if s != Status::Ok {
         fs::unlink(&tmp);
+    } else if busy(ram, slot) {
+        ram.reload = 1;
     }
     ram.xfer_state = 0;
     s
@@ -319,7 +335,10 @@ fn scan(ram: &mut StubRam) -> (Status, u32) {
     if !fs::read_exact(&mut ram.file, &mut raw) {
         return (Status::Io, 0);
     }
-    let h = parse_header(&raw).ok().filter(|h| check_slot(h, ram.xfer_slot).is_ok());
+    // a loader must be this model's (byte 0x38), an app carries none
+    let h = loader_model_ok(&M, &raw)
+        .and_then(|clean| parse_header(&clean).ok())
+        .filter(|h| check_slot(h, ram.xfer_slot).is_ok());
     let body_len = h.as_ref().map_or(0, |h| file_size(h) as usize - HEADER_SIZE);
     let (mut all, mut body, mut tcrc) = (crc32(0, &raw), 0u32, 0u32);
     let mut head = [0u8; TRAILER_HEAD];

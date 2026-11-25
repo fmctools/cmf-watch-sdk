@@ -1,6 +1,7 @@
-// The stub's own view (`model::WP3.menu_view`, 0x147): a titled "Apps" screen with an empty-state line. Prototype
-// for milestone M1 of the loader port: no loader is loaded yet, the view only proves the id, the 20-byte view-table
-// record `wp2apps firmware --model wp3` writes for it, and the way back to the app list.
+// The stub's own view (`model::WP3.menu_view`, 0x147). On PRELOAD it loads the loader package (slot L) from NAND
+// into a RES block, relocates it and hands it every message from then on, as the WP2 stub's view.rs does (the loader
+// draws the installed-apps menu and runs apps). Without a loader that loads (none installed, another model's, out of
+// memory) the view stays the placeholder below: a titled "Apps" screen with a line saying why.
 //
 // Messages (`model::WP3.view_msg_*`, emulator recon): PRELOAD asks the stock for a LAYOUT, LAYOUT builds on the
 // active screen, DELETE frees what LAYOUT made. Keys are left to the stock, like goodbye_view (also a proc-style
@@ -12,7 +13,10 @@
 use core::ffi::c_void;
 use core::mem::transmute;
 use core::ptr::null_mut;
+use wp2_core::heap::RES;
+use wp2_core::layout::{StubRam, E_NOMEM, LOADER_SLOT};
 use wp2_core::model::WP3 as M;
+use wp2_core::port;
 
 const fn some(v: Option<u32>) -> u32 {
     match v {
@@ -60,7 +64,79 @@ macro_rules! stock {
 
 pub static NAME: [u8; 13] = *b"wp3apps_view\0";
 
+const FOCUS: u32 = some(M.view_msg_focus);
+const DEFOCUS: u32 = some(M.view_msg_defocus);
+const REFUSE: i32 = -2;
+// StubRam.loader_state
+const LOADED: u8 = 1;
+const NO_LOADER: u8 = 2;
+const NO_MEMORY: u8 = 3;
+
+type Proc = extern "C" fn(u32, u32, *mut c_void) -> i32;
+
 pub extern "C" fn wp3_view_proc(view_id: u32, msg: u32, data: *mut u8) -> i32 {
+    let ram = crate::ble::ram();
+    ram.trace[ram.trace_head as usize % ram.trace.len()] = (msg << 16) | view_id;
+    ram.trace_head = ram.trace_head.wrapping_add(1);
+    if msg != PRELOAD && ram.loader_state == LOADED && u32::from(ram.loader_view) != view_id {
+        return 0; // a view whose instance another view took over
+    }
+    if msg == FOCUS || msg == DEFOCUS {
+        ram.loader_focus = (msg == FOCUS) as u8;
+    }
+    if msg == FOCUS && ram.reload != 0 && ram.loader_state == LOADED {
+        // a new loader arrived while the menu was behind another view (ble.rs `end`): load it as a PRELOAD would
+        if wp3_view_proc(view_id, PRELOAD, core::ptr::null_mut()) < 0 {
+            return REFUSE;
+        }
+    }
+    if msg == PRELOAD {
+        ram.reload = 0;
+        ram.loader_view = view_id as u16;
+        if ram.loader_state == LOADED {
+            loader(ram)(view_id, DELETE, core::ptr::null_mut()); // a second PRELOAD without DELETE
+        }
+        release(ram);
+        match port::load(&M, LOADER_SLOT, &mut ram.load_file, &mut ram.load_scratch) {
+            Ok((block, h)) => {
+                ram.loader_block = block as u32;
+                ram.loader_size = h.image_size;
+                ram.loader_entry = h.entry;
+                ram.loader_state = LOADED;
+            }
+            Err(e) => ram.loader_state = if e == E_NOMEM { NO_MEMORY } else { NO_LOADER },
+        }
+    }
+    if ram.loader_state != LOADED {
+        ram.launch = 0;
+        return placeholder(view_id, msg, data, ram.loader_state);
+    }
+    ram.loader_active = 1;
+    let rc = loader(ram)(view_id, msg, data as *mut c_void);
+    if msg == PRELOAD && rc < 0 {
+        release(ram);
+        ram.loader_state = NO_MEMORY;
+        return placeholder(view_id, msg, data, ram.loader_state);
+    }
+    if msg == DELETE {
+        ram.loader_focus = 0;
+        release(ram);
+        ram.loader_state = 0;
+    }
+    rc
+}
+
+fn loader(ram: &StubRam) -> Proc {
+    unsafe { transmute(((ram.loader_block + ram.loader_entry) | 1) as usize) }
+}
+
+fn release(ram: &mut StubRam) {
+    unsafe { port::free(&M, RES, ram.loader_block as *mut u8) };
+    ram.loader_block = 0;
+    ram.loader_active = 0;
+}
+
+fn placeholder(view_id: u32, msg: u32, data: *mut u8, state: u8) -> i32 {
     match msg {
         PRELOAD => {
             // a new instance: the word may hold anything until our LAYOUT fills it
@@ -70,7 +146,7 @@ pub extern "C" fn wp3_view_proc(view_id: u32, msg: u32, data: *mut u8) -> i32 {
             stock!(M.view_layout, fn(u32) -> i32)(view_id)
         }
         LAYOUT if !data.is_null() => {
-            unsafe { layout(data) };
+            unsafe { layout(data, state) };
             0
         }
         DELETE if !data.is_null() => {
@@ -81,7 +157,7 @@ pub extern "C" fn wp3_view_proc(view_id: u32, msg: u32, data: *mut u8) -> i32 {
     }
 }
 
-unsafe fn layout(data: *mut u8) {
+unsafe fn layout(data: *mut u8, state: u8) {
     let slot = unsafe { data.add(VIEW_USER) as *mut *mut State };
     if !unsafe { *slot }.is_null() {
         unsafe { delete(data) }; // a second LAYOUT without DELETE
@@ -111,7 +187,8 @@ unsafe fn layout(data: *mut u8) {
     let title = label(cont, 0, TITLE_Y, SCREEN, lh, b"Apps\0");
     style(title, LV_STYLE_TEXT_ALIGN, TEXT_ALIGN_CENTER);
     style(title, LV_STYLE_TEXT_COLOR, RED);
-    let empty = label(cont, TEXT_X, (SCREEN - lh) / 2, SCREEN - 2 * TEXT_X, lh, b"No apps installed\0");
+    let why: &'static [u8] = if state == NO_MEMORY { b"Not enough memory\0" } else { b"No loader installed\0" };
+    let empty = label(cont, TEXT_X, (SCREEN - lh) / 2, SCREEN - 2 * TEXT_X, lh, why);
     style(empty, LV_STYLE_TEXT_ALIGN, TEXT_ALIGN_CENTER);
     style(empty, LV_STYLE_TEXT_COLOR, GREY);
 }

@@ -853,6 +853,14 @@ frame in r4). The protocol is the WP2 one with two differences: DATA is `0x90A9`
 seventh byte, the model (2; a WP2 stub sends 6 bytes, which hosts read as model 1). `wp2apps` picks DATA from that
 byte. No loader yet: MSG and PUSH answer NO_APP.
 
+Loader (milestone M2): `wp2-loader --features wp3` builds the same source for the Watch 3 Pro; `src/plat.rs` maps
+every stock name to `model::WP3` (fs/heap/load through wp2-core `port.rs`; lv_obj_t 0x30 offsets; suspend 0xCA / wake
+0xCB; keys 0x1E / 0x1F / 0x04000001 / 0x71; wake id 0x147; AOD msgbox 0x136; time from the UTC API). The package
+records the model in header byte 0x38 (2; reserved and zero for WP2, so a WP2 stub refuses it, and the WP3 stub
+refuses a loader without it). The stub's view 0x147 loads slot L as the WP2 stub's view.rs does and shows a
+placeholder ("No loader installed") when it cannot. Motor, GPS, heart rate, phone media, the music tile, storage
+inspection, widget cards and pages answer an error on this model (M3).
+
 | Item | WP2 1.0.0.73 | Watch 3 Pro 1.0.1.77 |
 |---|---|---|
 | `WFManager_Init` | `0x100DE020` | `0x100D6DAC` |

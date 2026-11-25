@@ -34,8 +34,8 @@ class FakeSession:
         return b"\0"
 
 
-def sample(name="hello", kind=package.KIND_APP):
-    return package.pack(bytes(64), name=name, version=3, kind=kind)
+def sample(name="hello", kind=package.KIND_APP, model="wp2"):
+    return package.pack(bytes(64), name=name, version=3, kind=kind, model=model)
 
 
 class InstallFlowTest(unittest.IsolatedAsyncioTestCase):
@@ -95,7 +95,8 @@ class InstallFlowTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_model_byte_picks_the_data_opcode(self):
         for model, op in ((None, 0x90A2), (install.MODEL_WP2, 0x90A2), (install.MODEL_WP3, 0x90A9)):
-            for data in (sample(), sample("l", package.KIND_LOADER)):
+            name = install.MODEL_NAMES[model or install.MODEL_WP2]
+            for data in (sample(), sample("l", package.KIND_LOADER, name)):
                 s = FakeSession(stub=10, model=model)
                 await install.install(s, data)
                 sent = {c for c, _ in s.calls}
@@ -105,6 +106,14 @@ class InstallFlowTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((await install.stub(FakeSession(stub=10))).data_opcode, install.DATA)
         with self.assertRaisesRegex(ValueError, "unexpected"):
             await install.stub(FakeSession(stub=10, model=9))
+
+    async def test_loader_for_the_other_model_refused(self):
+        for model, data in ((install.MODEL_WP3, sample("l", package.KIND_LOADER)),
+                            (None, sample("l", package.KIND_LOADER, "wp3"))):
+            s = FakeSession(stub=10, model=model)
+            with self.assertRaisesRegex(ValueError, "loader; the watch is"):
+                await install.install(s, data)
+            self.assertFalse(any(c == install.BEGIN for c, _ in s.calls))
 
     async def test_info_empty_and_full(self):
         s = FakeSession({2: sample()[:64]})

@@ -223,3 +223,27 @@ class AbiMinorTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ModelByteTest(unittest.TestCase):
+    def test_loader_model_byte(self):
+        wp3 = package.pack(bytes(64), name="loader", version=1, kind=package.KIND_LOADER, model="wp3")
+        self.assertEqual(wp3[package.MODEL_OFFSET], 2)
+        self.assertEqual(package.parse(wp3).model, "wp3")
+        wp2 = package.pack(bytes(64), name="loader", version=1, kind=package.KIND_LOADER)
+        self.assertEqual(wp2[package.MODEL_OFFSET:package.HEADER_SIZE], bytes(8))
+        self.assertEqual(package.parse(wp2).model, "wp2")
+        # the byte is outside the header CRC span, so the WP2 stub's reserved-byte check is what refuses it
+        self.assertGreaterEqual(package.MODEL_OFFSET, package.HEADER_CRC_SPAN + 4)
+
+    def test_apps_carry_no_model(self):
+        with self.assertRaisesRegex(ValueError, "only a loader"):
+            package.pack(bytes(64), name="app", version=1, model="wp3")
+        bad = bytearray(package.pack(bytes(64), name="app", version=1))
+        bad[package.MODEL_OFFSET] = 2
+        with self.assertRaisesRegex(ValueError, "reserved"):
+            package.parse(bytes(bad))
+        bad = bytearray(package.pack(bytes(64), name="loader", version=1, kind=package.KIND_LOADER))
+        bad[package.MODEL_OFFSET] = 9
+        with self.assertRaisesRegex(ValueError, "reserved"):
+            package.parse(bytes(bad))

@@ -120,6 +120,8 @@ async def install(s, data: bytes, slot: int | None = None) -> int:
     if pkg.kind != package.KIND_LOADER and slot == LOADER_SLOT:
         raise ValueError("slot L takes only the loader package")
     st = await stub(s)
+    if pkg.kind == package.KIND_LOADER and pkg.model != MODEL_NAMES[st.model]:
+        raise ValueError(f"this is a {pkg.model} loader; the watch is a {MODEL_NAMES[st.model]}")
     if pkg.widget_icons and st.version < package.STUB_TRAILER:
         data = package.strip_trailer(data)  # an older stub refuses the extra bytes; it draws no icons anyway
     if pkg.kind == package.KIND_LOADER:
