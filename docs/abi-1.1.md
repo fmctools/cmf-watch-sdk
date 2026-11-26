@@ -65,6 +65,9 @@ running app is ABI 1.0), `8` FULL (inbox full, retry), `9` PAUSED (a stock popup
 `seq` counts EVENT frames per stub boot, modulo 256; a gap means the host lost frames (a disconnect, or the outbox
 was dropped).
 
+Streaming an image to an app rides on `0x90A5` with slot `0xFF`: START/DATA/DONE chunks, each acknowledged
+before the next one. Protocol, budgets and the receiver pattern: docs/bitmap-assets.md.
+
 **No collision with stock.** The stock dispatcher `0x100D343C` takes `c1 == 0xFFFF && c2 > 0x908B` straight to its
 `default` branch (`movw r2, #0x908b; cmp; bhi 0x100D34EA`), the branch the stub hooks. No stock handler sees
 `0x90A0..0x90A5`. Watch → host frames of stock system commands are `request | 0xA000`, so at most `0xB08B`;

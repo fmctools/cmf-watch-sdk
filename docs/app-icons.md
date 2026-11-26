@@ -85,3 +85,10 @@ an app runs from it).
 ## Showing another installed app
 
 Apps can use `Batch::installed_app_icon(object, slot, IconSize::Native)` with the storage-inspection loader. This is separate from declaring the app's own launcher icon. See [Storage inspection](storage-inspection.md) for capability checks, supported sizes, fallback and lifetime rules.
+
+## Arbitrary app bitmaps
+
+The formats above are launcher and widget chrome. The images an app itself draws (photos,
+illustrations, game art) are `bitmaps/*.png` plus `Api::pixels` (canvas apps) or `Batch::image` +
+`Batch::set_image` (LVGL apps): different budgets, no `WP2I`/`WP2W` descriptors, nothing for the
+menu or stub to read. See [Bitmap assets](bitmap-assets.md).

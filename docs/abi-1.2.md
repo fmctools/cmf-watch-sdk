@@ -49,7 +49,7 @@ picks the lowest free handle and keeps the same table as the loader.
 
 | op | name | payload | LVGL call | Checks |
 |---|---|---|---|---|
-| 0x01 | CREATE | `class u8, parent u16`; classes 0 obj, 1 label, 2 btn, 3 arc, 4 bar, 5 slider, 6 roller | `lv_<class>_create(parent)` | handle free; parent live and not a scroll bar; class 7 is refused |
+| 0x01 | CREATE | `class u8, parent u16`; classes 0 obj, 1 label, 2 btn, 3 arc, 4 bar, 5 slider, 6 roller, 12 image (a bitmap over the app's own pixels) | `lv_<class>_create(parent)` | handle free; parent live and not a scroll bar; class 7 is refused |
 | 0x02 | DEL | – | `lv_obj_del` | not the root, **not a scroll bar** (`BadClass`; a bar goes with its target, which keeps callbacks into it). Frees the handle, every descendant and the scroll bars that target a freed object |
 | 0x03 | SIZE | `w i32, h i32` raw `lv_coord_t` | `lv_obj_set_size` | not the root. `LV_PCT(n)` = `0x2000_0000 \| n`, `LV_SIZE_CONTENT` = `0x2000_07D1` (SDK: `pct`, `CONTENT`) |
 | 0x04 | ALIGN | `align u8, x i16, y i16` | `lv_obj_align` | not the root; `align` 0..=21 |
@@ -67,6 +67,7 @@ picks the lowest free handle and keeps the same table as the loader.
 | 0x10 | ANGLES | `bg_start u16, bg_end u16, rotation u16` degrees | `lv_arc_set_bg_angles`, `lv_arc_set_rotation` | arc only, each ≤ 360 |
 | 0x11 | FOCUS | `icon u16` (px, 0 = none) | callbacks on SCROLL 11 and LAYOUT_CHANGED 43 that apply the stock app list's fisheye (`lvcmd::focus_shape`, `docs/recon.md`) to each child: `PAD_LEFT` = shift, `TEXT_OPA`, child 0 resized to `icon · zoom / 256` and moved right by half of what it lost (`TRANSLATE_X`, a loader from 2026-11-16 on), so it zooms around its centre like the stock icon; the child nearest the centre line gets `LV_STATE_CHECKED` and the app gets `Event { kind: LV, x: handle, y: 100 (FOCUSED), delta: index }` when it changes | an `obj`, not the root; `icon ≤ 466`. One container per app (a new FOCUS replaces it), 32 children at most. Added 2026-11-12: an earlier 1.2 loader answers `-22` |
 | 0x12 | LONG_MODE | `mode u8` (WRAP 0, DOT 1, SCROLL 2, SCROLL_CIRCULAR 3, CLIP 4) | `lv_label_set_long_mode` | label only. Added 2026-11-12 |
+| 0x19 | IMAGE_SRC | `ptr u32, w u16, h u16, cf u8` (4 = RGB565) | builds an `lv_img_dsc_t` the loader keeps per handle, then `lv_img_set_src` | an image object (CREATE class 12) only; 1..=466 per side; `ptr` + `2·w·h` must lie inside the running app's image (checked before validation runs, like the batch buffer itself); the loader syncs the PSRAM cache, so re-submit after changing the pixels. Added 2026-11-27: an earlier loader answers `-22` |
 
 ### Deviations from the design spec
 
@@ -79,7 +80,8 @@ picks the lowest free handle and keeps the same table as the loader.
 
 ### Classes and parts
 
-- `obj`, `label`, `btn`, `arc`, `bar`, `slider`, `roller`, plus the vendor round scroll bar. The image has no switch,
+- `obj`, `label`, `btn`, `arc`, `bar`, `slider`, `roller`, `image` (bitmap over app pixels, docs/bitmap-assets.md),
+  plus the vendor round scroll bar. The image has no switch,
   checkbox, list, msgbox, dropdown, textarea, keyboard or spinner (`docs/recon-lvgl.md`); compose them.
 - **There is no theme.** The firmware styles nothing, so a widget without explicit styles for its parts is invisible
   or bare: a slider has no track, indicator or knob, an arc no arc, a button no background. Style each part with

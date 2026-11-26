@@ -414,3 +414,36 @@ can't be read back. So the stub answers its own release:
   (emulator). An icon that does not fit falls back to the letter (`heap::alloc` checks first).
 - **Order of updates.** OTA first (stub 8), then the loader; until the OTA the phone sees 8 slots and installs only
   there. Downgrading the stub leaves `8.pkg`..`F.pkg` on NAND unseen: remove them before.
+
+## Bitmap blit (loader of 2026-11-27, no ABI bump)
+
+A canvas app copies RGB565 pixels from its own memory into the framebuffer in one call — baked
+bitmap assets and streamed photo chunks both land here. Like `SENSOR` it travels through
+`lv_submit` even for apps that never build an LVGL screen, and like `Heart rate` it is not a new
+`Api` field (same reasoning above: the table keeps its size, older loaders never see the field).
+
+### The call
+
+SDK `Api::pixels(px: &[u16], x, y, w, h) -> i32` (app-guide.md, "Drawing"): one row-wise copy
+clipped to the screen; `-1` for a side outside 1..=466 or a short `px`. The SDK submits the
+record and, when the loader answers `-22` (before 2026-11-27, and in the simulator), draws the
+same picture as spans of `rect` — so apps call it unconditionally and never gate on a loader
+date.
+
+### Wire format
+
+Alone in a batch, little endian:
+
+```text
+[0x1B, 12, 0, 0, ptr u32, x i16, y i16, w u16, h u16]
+```
+
+`ptr .. ptr + 2·w·h` must lie inside the running app's image — checked in `lv_submit` next to
+the batch buffer's own range check — and the loader then blits on the app thread and marks the
+dirty box like `fill_rect` (one write-back of the touched rows at the next `show`). Inside a
+longer batch, or on an older 1.2 loader, the opcode is unknown and the batch answers `-22`,
+which is exactly the SDK's fallback trigger.
+
+LVGL apps do not use this record: their screen replaces the framebuffer, so they show bitmaps
+with an `IMAGE_SRC` batch record instead (abi-1.2.md, "Command records"). Formats, budgets and
+the streaming receiver: docs/bitmap-assets.md.
