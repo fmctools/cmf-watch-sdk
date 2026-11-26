@@ -84,8 +84,9 @@ pub extern "C" fn wp3_view_proc(view_id: u32, msg: u32, data: *mut u8) -> i32 {
     if msg == FOCUS || msg == DEFOCUS {
         ram.loader_focus = (msg == FOCUS) as u8;
     }
-    if msg == FOCUS && ram.reload != 0 && ram.loader_state == LOADED {
-        // a new loader arrived while the menu was behind another view (ble.rs `end`): load it as a PRELOAD would
+    if msg == FOCUS && ram.reload != 0 && ram.loader_state == LOADED && ram.running_slot == 0xFF {
+        // a new loader landed while this one was loaded (an install begun before the menu opened, ble.rs `end`): load
+        // it as a PRELOAD would, but never under a running app (that waits for a FOCUS after the app ends)
         if wp3_view_proc(view_id, PRELOAD, null_mut()) < 0 {
             return REFUSE;
         }

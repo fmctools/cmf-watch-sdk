@@ -229,8 +229,10 @@ fn abort(ram: &mut StubRam) {
 }
 
 fn begin(ram: &mut StubRam, slot: u8, size: u32, crc: u32) -> Status {
-    // the running app's package (the menu, from which the loader is replaced, is fine: it reloads on its next FOCUS)
-    if slot != LOADER_SLOT && busy(ram, slot) {
+    // the loader while its view is open, or the running app's package. The WP2 stub takes such an install only for a
+    // page behind the face (its `behind_face`); this model has no pages, so the loaded loader is always in the
+    // foreground or under a view on top of it, and a reload at its next FOCUS would end a running app
+    if busy(ram, slot) {
         return Status::Busy;
     }
     let limit = if slot == LOADER_SLOT { LOADER_SIZE } else { APP_SIZE };
