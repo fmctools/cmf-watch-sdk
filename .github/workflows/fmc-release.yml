@@ -18,6 +18,7 @@ on:
         description: Which watch (wp2 = Watch Pro 2, wp3 = Watch 3 Pro)
         type: choice
         options: [wp2, wp3, both]
+        default: wp2
       description:
         description: Store description, markdown (\n for a line break; empty keeps the live text; `both` gives it to both records)
         type: string
@@ -83,7 +84,8 @@ jobs:
           uv run --locked wp2apps ota-image --app target/app-wp2.bin --output target/fw-wp2.bin --version-code $((0x10000 + stub))
           if [ "${{ inputs.model }}" != wp2 ]; then
             test -f target/app-wp3.bin  # build-fw skips it without the 3 Pro stock image
-            uv run --locked wp2apps ota-image --model wp3 --app target/app-wp3.bin --output target/fw-wp3.bin               --version-code $((0x10000 + stub))
+            uv run --locked wp2apps ota-image --model wp3 --app target/app-wp3.bin --output target/fw-wp3.bin \
+              --version-code $((0x10000 + stub))
           fi
       - name: Draft on FMC
         id: publish
@@ -98,8 +100,18 @@ jobs:
         run: |
           FMC_DESCRIPTION=$(printf '%b' "$FMC_DESCRIPTION")
           models=$([ "$MODEL" = both ] && echo "wp2 wp3" || echo "$MODEL")
-          # ponytail: a refused draft fails the run after earlier drafts are up; those stay on FMC unpublished
-          # until deleted in the admin UI
+          # the Watch 3 Pro records must exist before anything is uploaded (with `both`, a refusal after the wp2
+          # drafts would leave those on FMC)
+          if [ "$MODEL" != wp2 ]; then
+            if [ "$WHAT" != loader ] && [ -z "$FMC_LIVE_PATCHED_WP3" ]; then
+              echo "refused: set the repository variable FMC_LIVE_PATCHED_WP3 (docs/ota.md)" >&2; exit 1
+            fi
+            if [ "$WHAT" != firmware ] && [ -z "$FMC_LIVE_LOADER_WP3" ]; then
+              echo "refused: set the repository variable FMC_LIVE_LOADER_WP3 (docs/ota.md)" >&2; exit 1
+            fi
+          fi
+          # ponytail: a draft refused for another reason fails the run after earlier drafts are up; those stay on
+          # FMC unpublished until deleted in the admin UI
           drafts=""  # "model kind id sha256;" per draft, for promote
           for m in $models; do
             loader=target/loader.wp2app; [ "$m" = wp3 ] && loader=target/loader-wp3.wp2app
@@ -133,7 +145,8 @@ jobs:
         run: |
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          while read -r m kind id sha; do
+          # the list on fd 3, so a command in the loop can never read it from stdin
+          while read -r m kind id sha <&3; do
             [ -n "$id" ] || continue
             tag=$(scripts/publish-fmc promote "$id" "$sha" out "$m")
             git tag "$tag" "$GITHUB_SHA" && git push origin "$tag"
@@ -142,4 +155,4 @@ jobs:
               name="App Loader"; [ "$m" = wp3 ] && name="App Loader (Watch 3 Pro)"
               gh release create "$tag" "$f" --title "$name $tag" --notes "Built from $GITHUB_SHA."
             fi
-          done < <(tr ';' '\n' <<< "$DRAFTS")
+          done 3< <(tr ';' '\n' <<< "$DRAFTS")

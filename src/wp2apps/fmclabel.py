@@ -20,7 +20,7 @@ import struct
 
 BASE = 0x10000000
 SUFFIX = "-fmc"
-MAX_LABEL = 19  # the info record's version field: 20 bytes with the NUL
+MAX_LABEL = 19  # a sanity bound: real versions are 8 chars; the page copies the text (WP2) or formats it into 0x80 bytes (WP3)
 ABOUT_VIEW = b"about_view"
 
 
