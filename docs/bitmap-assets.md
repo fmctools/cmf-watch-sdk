@@ -102,6 +102,65 @@ scripts/sim bitmap-stream --tcp 8765
 uv run --locked python -m wp2apps.stream photo.png --tcp 8765
 ```
 
+### Receiving in an app (the streaming API from the watch side)
+
+Receiving is ordinary ABI 1.1 host messages plus `Api::pixels` — no new `Api` fields, so any
+1.2-era loader can run a receiver (the fast copy needs the bitmap loader; older loaders take the
+`rect` fallback automatically). The complete, tested receiver is
+`sdk/examples/bitmap-stream` (`src/protocol.rs` parses frames and splits them into row spans);
+the shape of the loop:
+
+```rust
+// one host message (MSG_MAX 128), 2-aligned so DATA payloads read as RGB565 words
+#[repr(align(2))]
+struct Aligned([u8; 128]);
+static mut BUF: Aligned = Aligned([0; 128]);
+
+match event.kind {
+    MESSAGE => {
+        let buf = unsafe { &mut *addr_of_mut!(BUF.0) };
+        while let Some(m) = api.recv(buf) {
+            match protocol::parse(m) {
+                // START: remember w/h, clear the screen, status "receiving"
+                Some(Msg::Start { w, h }) => { receiving = Some((w, h)); }
+                // DATA: payload = RGB565 words; one pixels() call per row-span, then show
+                Some(Msg::Data { offset, payload }) => {
+                    let Some((w, h)) = receiving else { continue };
+                    let ox = (api.width - w) / 2;   // centre it: the panel is a disc
+                    let oy = (api.height - h) / 2;
+                    let px = unsafe {
+                        core::slice::from_raw_parts(payload.as_ptr() as *const u16, payload.len() / 2)
+                    };
+                    for (x, y, n, src) in protocol::segments(offset, payload.len(),
+                                                              w as usize, h as usize) {
+                        api.pixels(&px[src..src + n], (ox + x as u16) as i16,
+                                   (oy + y as u16) as i16, n as u16, 1);
+                    }
+                    api.show();   // progressive reveal: each chunk flushes only its rows
+                }
+                Some(Msg::Done) => { /* small status line, keep the picture */ }
+                _ => {}
+            }
+        }
+    }
+    _ => {}
+}
+```
+
+Rules that keep a receiver working:
+
+- **Drain the whole inbox per `MESSAGE`** — it is only four messages deep; the sender paces or
+  waits for an ACK per chunk anyway.
+- **Never buffer the whole image**: chunks go straight into the framebuffer, so the receiver's
+  RAM cost is the 128 B message buffer regardless of picture size (a full 466×466 stream fits
+  this rule; it just takes longer).
+- **Centre every draw** at `(466-w)/2, (466-h)/2` — image coordinates start at the top-left
+  corner, which is off the round panel.
+- **Handle `PAUSE`/`RESUME`**: messages are refused with status 9 while paused; after resume
+  ask the host to restart with `START` (or ignore a stream that was interrupted).
+- A `DATA` offset or length that runs past the image is clipped by `segments` — treat every
+  message as untrusted (anybody in BLE range can send one).
+
 The receiver keeps **no image buffer**: every chunk is blitted straight into the framebuffer (progressive reveal),
 so streaming a full screen costs one screen of RAM — zero — but the whole picture must fit the screen and the app
 must stay running. It draws the picture **centred**: the panel is a disc, and a corner-anchored image (0,0) lies

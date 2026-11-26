@@ -8,6 +8,9 @@ Status: proven in the emulator. On a real watch: the stub firmware (OTA), the 1.
 
 - Design: [docs/specs/2026-11-10-wp2-app-loader-design.md](docs/specs/2026-11-10-wp2-app-loader-design.md)
 - Writing an app (quick start, platform limits, API, Mac channel, testing): [docs/app-guide.md](docs/app-guide.md)
+- Bitmap assets and streaming images (`Api::pixels`, `Batch::set_image`, `bitmaps!`, wire protocol,
+  limits, receiver pattern): [docs/bitmap-assets.md](docs/bitmap-assets.md)
+- Testing the loader and apps on Windows: [docs/emulator-windows.md](docs/emulator-windows.md)
 - Publishing an app to the FMC store: [cmf-tech-community/apps](https://github.com/cmf-tech-community/apps), built
   with this SDK; the apps in `sdk/examples/` are the SDK's tests and demos
 - App ABI 1.1 (host messages, storage, time, battery, screen on): [docs/abi-1.1.md](docs/abi-1.1.md)

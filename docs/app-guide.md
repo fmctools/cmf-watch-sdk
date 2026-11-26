@@ -303,6 +303,26 @@ inside the app (there is no wrapper). `cmf_wp2_app::api()` returns `Some(&Api)` 
 | `pixels(px: &[u16], x: i16, y: i16, w: u16, h: u16)` | Draws `w * h` row-major RGB565 pixels at (x, y), clipped like `rect`; `0`, or `-1` for a side outside 1..=466 or a short `px` (docs/bitmap-assets.md). One copy on a loader with bitmaps; on an older loader or the simulator the same picture falls back to spans of `rect` |
 | `show()` | Publishes what was drawn since the last `show` (see "What is slow"). Without it nothing is guaranteed to reach the panel. While paused the box stays pending and the loader repaints everything on resume |
 
+### Bitmap assets
+
+Two ways to show an image, both documented with formats, limits and the wire protocol in
+[docs/bitmap-assets.md](bitmap-assets.md):
+
+- **Baked into the package** — put PNGs in `bitmaps/` next to `Cargo.toml`, call
+  `cmf_wp2_app::bitmaps!()`, then draw `bitmaps::LOGO` with `api.pixels(&LOGO.px, x, y, LOGO.w,
+  LOGO.h)` (canvas apps) or `Batch::image` + `Batch::set_image` (LVGL apps). `scripts/build-app`
+  regenerates `src/bitmaps.gen.rs` (also run it by hand: `python -m wp2apps.bitmaps <crate>`).
+  Budget: all asset pixels together ≤ 48 KiB, every side 1..=466 — see the Limits table above.
+- **Streamed from a phone** — a host sends `START/DATA/DONE` as ordinary host messages; the app
+  turns each chunk into `pixels()` spans as it arrives (receiver pattern:
+  `sdk/examples/bitmap-stream`; senders: `python -m wp2apps.stream` and the Android
+  `photo-stream-companion`). Limits and the temporary-protocol caveats: bitmap-assets.md,
+  "Streaming images from the phone".
+
+Both draw from memory the app owns: pixels stay in the relocated package image, are never copied
+into loader storage, and the loader range-checks every pointer against the app's own image before
+drawing.
+
 ### Waiting and events
 
 `event(timeout_ms: u32) -> Option<Event>` is the only way to wait or sleep. `u32::MAX` waits forever, `0` polls,
