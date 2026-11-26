@@ -121,6 +121,7 @@ impl Log {
     }
 }
 
+#[cfg(not(windows))]
 #[repr(C)]
 struct Tm {
     sec: i32,
@@ -136,11 +137,13 @@ struct Tm {
     zone: *const std::ffi::c_char,
 }
 
+#[cfg(not(windows))]
 unsafe extern "C" {
     fn localtime_r(t: *const i64, out: *mut Tm) -> *mut Tm;
 }
 
 /// Local time (zone from TZ) of `ms` since the epoch.
+#[cfg(not(windows))]
 pub fn local(ms: i64) -> Option<Time> {
     let secs = ms.div_euclid(1000);
     let mut tm =
@@ -158,5 +161,70 @@ pub fn local(ms: i64) -> Option<Time> {
         weekday: tm.wday as u8,
         millis: ms.rem_euclid(1000) as u16,
         utc_offset_min: (tm.gmtoff / 60) as i16,
+    })
+}
+
+// The UCRT's struct tm is nine ints (no tm_gmtoff/tm_zone), localtime_s takes the pointers the other way
+// round, and the zone offset comes from _get_timezone: the Mac path above does not link on Windows.
+#[cfg(windows)]
+#[repr(C)]
+struct Tm {
+    sec: i32,
+    min: i32,
+    hour: i32,
+    mday: i32,
+    mon: i32,
+    year: i32,
+    wday: i32,
+    yday: i32,
+    isdst: i32,
+}
+
+#[cfg(windows)]
+unsafe extern "C" {
+    // UCRT: localtime_s is a header macro over this, and _get_dstflag does not exist
+    fn _localtime64_s(out: *mut Tm, t: *const i64) -> i32;
+    fn GetTimeZoneInformation(zone: *mut TimeZoneInfo) -> u32;
+}
+
+#[cfg(windows)]
+#[repr(C)]
+struct TimeZoneInfo {
+    bias: i32,
+    standard_name: [u16; 32],
+    standard_date: [u16; 8],
+    standard_bias: i32,
+    daylight_name: [u16; 32],
+    daylight_date: [u16; 8],
+    daylight_bias: i32,
+}
+
+/// Local time (zone from TZ) of `ms` since the epoch, Windows edition.
+#[cfg(windows)]
+pub fn local(ms: i64) -> Option<Time> {
+    let secs = ms.div_euclid(1000);
+    let mut tm = Tm {
+        sec: 0, min: 0, hour: 0, mday: 0, mon: 0, year: 0, wday: 0, yday: 0, isdst: 0,
+    };
+    if unsafe { _localtime64_s(&mut tm, &secs) } != 0 {
+        return None;
+    }
+    let mut zone = TimeZoneInfo {
+        bias: 0, standard_name: [0; 32], standard_date: [0; 8], standard_bias: 0,
+        daylight_name: [0; 32], daylight_date: [0; 8], daylight_bias: 0,
+    };
+    // 1 = standard time in effect, 2 = daylight time, 0 = failure (offset then stays 0)
+    let state = unsafe { GetTimeZoneInformation(&mut zone) };
+    let bias = zone.bias + if state == 2 { zone.daylight_bias } else { 0 };
+    Some(Time {
+        year: (tm.year + 1900) as u16,
+        month: (tm.mon + 1) as u8,
+        day: tm.mday as u8,
+        hour: tm.hour as u8,
+        minute: tm.min as u8,
+        second: tm.sec as u8,
+        weekday: tm.wday as u8,
+        millis: ms.rem_euclid(1000) as u16,
+        utc_offset_min: (-bias / 60) as i16,
     })
 }
