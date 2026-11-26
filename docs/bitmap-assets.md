@@ -145,3 +145,12 @@ show on the watch.
 - Cross-build: both example apps compile for `thumbv7em-none-eabi`, and `wp2-loader` checks.
 - Not yet run here: emulator e2e (needs `nix-shell`/`CMF_WATCH_UTILS`) and anything on a physical watch
   (owner's yes required). The 4x4 dither and on-screen appearance are unverified on hardware.
+
+## Testing on the emulator (Windows, verified 2026-11-27)
+
+`docs/emulator-windows.md` is the full recipe: runtime archives, MSYS2 libraries, netsimd,
+fixtures, then `scripts/emu-demo-windows.py` to boot the patched NOR, install `loader` +
+`bitmap-gallery` + `bitmap-stream` + `bitmap-lv`, launch one, and capture `frame.png`. The
+`stream` mode launches `bitmap-stream` and sends `ring.png` through the PC sender with
+`--channel-key` over the emulator's H4 link — the same frames the Android companion sends over
+BLE.
