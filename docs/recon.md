@@ -836,7 +836,7 @@ five hooks) holds only the guard, appended at the end of app.bin (`0x102BD280`);
 patches the sites above and fixes ACTH, `wp2apps ota-image --model wp3` (`make fw-ota-wp3`) puts it into the stock
 image. The stock data and the calls are in wp2-core `wfguard.rs` (`WP3`).
 
-Header version 2 (loader port milestone M1, prototype, emulator proof pending) adds an "Apps" entry to the stock app
+Header version 2 (loader port milestone M1) adds an "Apps" entry to the stock app
 list and the stub's own view: two more hooks for the List and Grid styles' update handlers (rodata `0x10215A68`,
 `0x10215948`, stock `0x10047351` / `0x10046D99`; adapted from jimhooker's MIT `wp3-applist.patch`), then the view proc
 and the view's name. `add_stub_wp3` copies the view table (20-byte records, `0x1000050C..0x1000136C`) after the stub,
@@ -851,7 +851,7 @@ StubRam at `0x3871ECC0`) and a hook at `bl read_payload` in the BLE dispatcher's
 frame in r4). The protocol is the WP2 one with two differences: DATA is `0x90A9` (the stock dispatcher sends
 `0x90A2` to its Do Not Disturb handler `0x100CD7EC`, never to the default branch), and the StubVersion reply has a
 seventh byte, the model (2; a WP2 stub sends 6 bytes, which hosts read as model 1). `wp2apps` picks DATA from that
-byte. No loader yet: MSG and PUSH answer NO_APP.
+byte. Until a loader is installed, MSG and PUSH answer NO_APP.
 
 Loader (milestone M2): `wp2-loader --features wp3` builds the same source for the Watch 3 Pro; `src/plat.rs` maps
 every stock name to `model::WP3` (fs/heap/load through wp2-core `port.rs`; lv_obj_t 0x30 offsets; suspend 0xCA / wake

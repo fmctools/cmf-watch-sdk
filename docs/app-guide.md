@@ -274,7 +274,7 @@ fn rgb(r: u32, g: u32, b: u32) -> u16 {
 
 The same app package runs on the CMF Watch 3 Pro (jx402_08 1.0.1.77) under the Watch 3 Pro loader
 (`wp2-loader --features wp3`, packed with `wp2apps pack --kind loader --model wp3`; a loader for the other model is
-refused at install). Proven in the emulator with `hello`: drawing, crown and button events, exit to the menu. Not available there yet (milestone M3); these calls return `-19` (ENODEV) instead of acting:
+refused at install). Proven in the emulator and on a physical Watch 3 Pro with `hello`: drawing, crown and button events, exit to the menu. Not available there yet (milestone M3); these calls return `-19` (ENODEV) instead of acting:
 `motor` (haptic chip, not PWM), GPS, heart rate, phone media keys and the music tile (`Class::Music` creation
 fails). Storage inspection answers `-95`. The app has no widget card or page entry on this model yet (the
 long-press sheet offers only Delete), and `time()` comes from the UTC clock plus the watch's zone, so
