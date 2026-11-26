@@ -74,3 +74,12 @@ Installed `fw-wp2.bin` (`VERSION_CODE=0x10002`) with the stock client of cmf-wat
 approves the `fmc-prod` environment, `promote` reads the image back from the draft, checks its sha256 against the
 draft job's, moves those exact bytes onto the live record and tags the commit (`stub-v<N>`, `loader-<date>-<sha7>`).
 First release this way: `stub-v5` and `loader-2026-11-15-f52cca1`.
+
+The run's `model` input picks the watch: `wp2` (Watch Pro 2, the default), `wp3` (Watch 3 Pro 1.0.1.77) or `both`.
+Each model has its own FMC records, so a Watch 3 Pro build is never offered to a Watch Pro 2 and the other way round.
+The Watch 3 Pro records are created once in the FMC admin UI (patched firmware and loader, device Watch 3 Pro, a
+version such as `1.0.1.77-wp3.0`, stub 0); their ids go in the repository variables `FMC_LIVE_PATCHED_WP3` and
+`FMC_LIVE_LOADER_WP3`, and without them a `wp3` draft is refused. The Watch 3 Pro image comes from the
+cmf-watch-utils commit that added it (the pinned one predates it). Watch 3 Pro tags carry a `wp3-` prefix
+(`wp3-stub-v<N>`, `wp3-loader-<date>-<sha7>`); Watch Pro 2 tags are unchanged. Both models' builds carry the
+`-fmc` About-page label.

@@ -3,11 +3,14 @@
 
   publish-fmc draft firmware target/fw-wp2.bin   checks, uploads a new unpublished record, prints its id
   publish-fmc draft loader target/loader.wp2app
+  publish-fmc draft firmware target/fw-wp3.bin wp3   the same for the Watch 3 Pro (its own FMC records)
   publish-fmc promote DRAFT_ID SHA256 OUT_DIR    the draft's image onto the live record, the draft deleted;
                                                  leaves the image in OUT_DIR, prints the git tag
 
 Env: FMC_PUBLISHER_EMAIL, FMC_PUBLISHER_PASSWORD (a `publishers` account), FMC_URL (default prod),
 FMC_DESCRIPTION (markdown; empty keeps the live record's), GITHUB_SHA.
+Watch 3 Pro: FMC_LIVE_PATCHED_WP3, FMC_LIVE_LOADER_WP3, the ids of its two live records (created once in the FMC
+admin UI, with a version such as 1.0.1.77-wp3.0 and stub 0); without them a wp3 draft is refused.
 """
 import datetime
 import hashlib
@@ -24,11 +27,15 @@ import zlib
 
 ROOT = Path(__file__).resolve().parents[1]
 URL = os.environ.get("FMC_URL", "https://fmc.freethinkel.dev").rstrip("/")
-LIVE = {"patched": "kqbnulphohzw2wb", "loader": "bfe60t13x4bgbgc"}  # the records the store shows
+LIVE = {  # the records the store shows, per model
+    "wp2": {"patched": "kqbnulphohzw2wb", "loader": "bfe60t13x4bgbgc"},
+    "wp3": {"patched": os.environ.get("FMC_LIVE_PATCHED_WP3", ""), "loader": os.environ.get("FMC_LIVE_LOADER_WP3", "")},
+}
 KIND = {"firmware": "patched", "loader": "loader"}
 SOURCE = {"patched": "https://github.com/cmf-tech-community/cmf-watch-sdk",
           "loader": "https://github.com/cmf-tech-community/cmf-watch-sdk/tree/main/fw/wp2-loader"}
-BOARD = "jx402_01_3089c"  # Watch Pro 2; fmc_frontend ota-image.ts reads it at 0x60
+BOARD = {"wp2": "jx402_01_3089c", "wp3": "jx402_08"}  # fmc_frontend ota-image.ts reads it at 0x60
+LOADER_MODEL = {"wp2": 0, "wp3": 2}  # package header byte 0x38 (wp2apps pack --model)
 RECORDS = "/api/collections/firmwares/records"
 
 
@@ -70,15 +77,23 @@ def stub_version():
     return int(re.search(r"STUB_VERSION: u32 = (\d+);", (ROOT / "fw/wp2-core/src/layout.rs").read_text())[1])
 
 
-def draft(what, path):
-    kind, data, token = KIND[what], Path(path).read_bytes(), login()
-    live = call("GET", f"{RECORDS}/{LIVE[kind]}", token)
+def live_id(model, kind):
+    need(model in LIVE, f"unknown model {model!r}")
+    need(LIVE[model][kind], f"no live {kind} record for {model}: set FMC_LIVE_{kind.upper()}_{model.upper()}")
+    return LIVE[model][kind]
+
+
+def draft(what, path, model="wp2"):
+    kind, data = KIND[what], Path(path).read_bytes()
+    lid = live_id(model, kind)
+    token = login()
+    live = call("GET", f"{RECORDS}/{lid}", token)
     sha7 = os.environ["GITHUB_SHA"][:7]
     if kind == "patched":
         stub = stub_version()
         need(stub > live["stub"], f"STUB_VERSION {stub} is not above the live record's stub {live['stub']}")
         board = data[0x60:0x60 + 28].split(b"\0")[0].decode(errors="replace")
-        need(board == BOARD, f"the image is for board {board!r}, not {BOARD}")
+        need(board == BOARD[model], f"the image is for board {board!r}, not {BOARD[model]}")
         verify = subprocess.run(["uv", "run", "--locked", "fwkit", "verify", path], cwd=ROOT, capture_output=True, text=True)
         need(verify.stdout.strip().endswith("ok"), f"fwkit verify: {verify.stdout.strip()} {verify.stderr.strip()}")
         prefix, n = re.fullmatch(r"(.*?)(\d+)", live["version"]).groups()
@@ -86,6 +101,7 @@ def draft(what, path):
     else:
         stub = 0
         need(data[:4] == b"WP2A" and data[6] == 1, "not a loader package")
+        need(data[0x38] == LOADER_MODEL[model], f"loader model byte {data[0x38]}, not {model}'s")
         crc = int.from_bytes(data[0x30:0x34], "little")
         need(crc == zlib.crc32(data[0x40:]), "package body CRC")  # image + relocations
         need(crc != int.from_bytes(file_of(live, token)[0x30:0x34], "little"), "the live App Loader is this same build")
@@ -100,23 +116,25 @@ def draft(what, path):
     print(rec["id"])
 
 
-def promote(draft_id, sha256, out):
+def promote(draft_id, sha256, out, model="wp2"):
     token = login()
     rec = call("GET", f"{RECORDS}/{draft_id}", token)
-    need(not rec["published"] and rec["kind"] in LIVE, f"{draft_id} is not a draft")
+    need(not rec["published"] and rec["kind"] in KIND.values(), f"{draft_id} is not a draft")
     data = file_of(rec, token)
     need(hashlib.sha256(data).hexdigest() == sha256, "the draft's image is not the one the draft job uploaded")
-    live = call("GET", f"{RECORDS}/{LIVE[rec['kind']]}", token)
+    live = call("GET", f"{RECORDS}/{live_id(model, rec['kind'])}", token)
     if rec["kind"] == "patched":
         need(rec["stub"] > live["stub"], f"draft stub {rec['stub']} is not above the live stub {live['stub']}")
-    name = "loader.wp2app" if rec["kind"] == "loader" else f"app_loader_stub{rec['stub']}.bin"
+    sfx = "" if model == "wp2" else f"-{model}"
+    name = f"loader{sfx}.wp2app" if rec["kind"] == "loader" else f"app_loader{sfx.replace('-', '_')}_stub{rec['stub']}.bin"
     call("PATCH", f"{RECORDS}/{live['id']}", token, {
         "version": rec["version"], "stub": rec["stub"], "description": rec["description"],
         "tested": "hardware", "source": rec["source"]}, (name, data))
     call("DELETE", f"{RECORDS}/{draft_id}", token)
     Path(out).mkdir(parents=True, exist_ok=True)
     (Path(out) / name).write_bytes(data)
-    print(f"stub-v{rec['stub']}" if rec["kind"] == "patched" else f"loader-{rec['version']}")
+    tag = f"stub-v{rec['stub']}" if rec["kind"] == "patched" else f"loader-{rec['version']}"
+    print(tag if model == "wp2" else f"wp3-{tag}")  # wp2 tags unchanged
 
 
 if __name__ == "__main__":
