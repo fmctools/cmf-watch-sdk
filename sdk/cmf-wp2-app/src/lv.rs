@@ -67,6 +67,10 @@ pub enum Class {
     /// play-pause / next and volume, with the stock images and fonts, 466 × 466. The loader fills it from the phone
     /// and sends the keys itself; one at a time. Use [`crate::stock::music`]. Loader of 2026-11-16 (older: `-22`).
     Music = 11,
+    /// A bitmap app carries in its own pixels: an `lv_img` whose source is set with [`Batch::set_image`]
+    /// (docs/bitmap-assets.md). The pixels stay in the app block; the loader never copies them. Create it, set its
+    /// source, then align or size it like any object. Loader with bitmap assets (older: `create` gives `INVALID`).
+    Image = 12,
 }
 
 /// `lv_align_t`.
@@ -465,6 +469,26 @@ impl Batch {
         self.put(0x12, obj.0, &[&[mode as u8]])
     }
 
+    /// Points an [`Class::Image`] at `px`: `w * h` row-major RGB565 pixels (each side 1..=466) carried in
+    /// static data (the pixels must live in the app block: `&'static [u16]` from a bitmap asset or a `static`).
+    /// The loader draws from those pixels in place and never copies them; re-submit after changing them to refresh
+    /// the cache. On a loader without bitmap assets the record is refused when the batch runs (`INVALID`).
+    pub fn set_image(&mut self, img: Obj, px: &'static [u16], w: u16, h: u16) -> Result<(), LvError> {
+        if !self.live(img) || self.class[img.0 as usize] != Class::Image as u8
+            || !(1..=466).contains(&w) || !(1..=466).contains(&h)
+            || px.len() < usize::from(w) * usize::from(h)
+        {
+            return Err(INVALID);
+        }
+        let ptr = px.as_ptr() as u32;
+        self.put(0x19, img.0, &[&ptr.to_le_bytes(), &w.to_le_bytes(), &h.to_le_bytes(), &[4]])
+    }
+
+    /// Creates an [`Class::Image`] bitmap object under `parent` (use [`Batch::set_image`] to give it pixels).
+    pub fn image(&mut self, parent: Obj) -> Result<Obj, LvError> {
+        self.create(Class::Image, parent)
+    }
+
     /// Display a validated installed app icon by actual slot, independent of menu order.
     /// Requires storage-inspection service v1. Missing/unloadable icons leave the background empty.
     pub fn installed_app_icon(
@@ -673,5 +697,28 @@ mod tests {
         let t = |minor| crate::tests::table(crate::ABI, minor);
         assert!(t(1).lv().is_none());
         assert!(t(2).lv().is_some());
+    }
+
+    #[test]
+    fn image_create_and_source_record() {
+        static PX: [u16; 6] = [1, 2, 3, 4, 5, 6];
+        let mut b = batch();
+        let img = b.image(ROOT).unwrap();
+        b.set_image(img, &PX, 3, 2).unwrap();
+        let mut want = std::vec![0x01, 3];
+        want.extend_from_slice(&img.0.to_le_bytes());
+        want.extend_from_slice(&[Class::Image as u8, 0, 0]);
+        want.extend_from_slice(&[0x19, 9]);
+        want.extend_from_slice(&img.0.to_le_bytes());
+        want.extend_from_slice(&(PX.as_ptr() as u32).to_le_bytes());
+        want.extend_from_slice(&3u16.to_le_bytes());
+        want.extend_from_slice(&2u16.to_le_bytes());
+        want.push(4);
+        assert_eq!(b.bytes(), want);
+        assert!(b.set_image(img, &PX[..5], 3, 2).is_err(), "short pixels");
+        assert!(b.set_image(img, &PX, 0, 2).is_err(), "zero width");
+        assert!(b.set_image(img, &PX, 467, 1).is_err(), "wider than the screen");
+        assert!(b.set_image(ROOT, &PX, 3, 2).is_err(), "the root is not an image");
+        assert_eq!(b.bytes(), want, "a refused call adds nothing");
     }
 }

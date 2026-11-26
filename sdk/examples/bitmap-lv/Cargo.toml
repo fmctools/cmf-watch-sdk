@@ -1,0 +1,20 @@
+[package]
+name = "bitmap-lv"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[dependencies]
+cmf-wp2-app = { path = "../../cmf-wp2-app" }
+
+[dev-dependencies]
+wp2-core = { path = "../../../fw/wp2-core" }
+
+[lib]
+name = "bitmap_lv"
+path = "src/screen.rs"
+
+[[bin]]
+name = "bitmap-lv"
+test = false
+bench = false

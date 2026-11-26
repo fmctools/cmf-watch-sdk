@@ -72,7 +72,20 @@ struct Lv {
     focus_icon: u16,
     focus_sel: i16,
     focus_last: [u32; FOCUS_MAX],
+    /// `lv_img_dsc_t` per handle for IMAGE_SRC: in the loader block, so it outlives the batch buffer and dies
+    /// with the objects (docs/bitmap-assets.md). Its `data` points into the app block.
+    dsc: [ImgDsc; MAX_OBJS + 1],
 }
+
+#[derive(Clone, Copy)]
+#[repr(C)]
+struct ImgDsc {
+    header: u32,
+    data_size: u32,
+    data: *const u8,
+}
+
+const NO_DSC: ImgDsc = ImgDsc { header: 0, data_size: 0, data: core::ptr::null() };
 
 // Lives in the loader block: zero again on every open of the view. Table::new() is not const: the zeroed table is
 // reset on the first submit (no root yet).
@@ -87,6 +100,7 @@ static mut LV_STATE: Lv = Lv {
     focus_icon: 0,
     focus_sel: -1,
     focus_last: [0; FOCUS_MAX],
+    dsc: [NO_DSC; MAX_OBJS + 1],
 };
 
 fn st() -> &'static mut Lv {
@@ -120,8 +134,23 @@ pub extern "C" fn submit(buf: *const u8, len: usize) -> i32 {
     if buf.is_null() || len > BATCH_MAX || p < block || p - block > size || len > size - (p - block) {
         return E_ARG;
     }
+    let sl = unsafe { core::slice::from_raw_parts(buf, len) };
+    // BLIT (docs/bitmap-assets.md): the pixels named by the record must be in the app block as well, like the
+    // record itself. Handled on the app thread before LVGL so a canvas app can draw without a root.
+    if let Some((px, x, y, w, h)) = lvcmd::blit(sl) {
+        let at = px as usize;
+        let bytes = w as usize * h as usize * 2;
+        if at < block || at - block > size || bytes > size - (at - block) {
+            return E_ARG;
+        }
+        return crate::app::blit(px as *const u16, x, y, w, h);
+    }
+    // IMAGE_SRC pixels follow the same range rule for every record in the batch (validation runs after this)
+    if !lvcmd::image_src_in(sl, block as u32, size as u32) {
+        return E_ARG;
+    }
     // SENSOR (heart rate, GPS) needs no LVGL: a canvas app sends it too, and it must not make the root
-    if let Some((sensor, on)) = lvcmd::sensor(unsafe { core::slice::from_raw_parts(buf, len) }) {
+    if let Some((sensor, on)) = lvcmd::sensor(sl) {
         if sensor == wp2_core::gps::SENSOR_GPS {
             return crate::gps::request(on);
         }
@@ -248,6 +277,7 @@ fn exec(r: &Rec) -> Result<(), i32> {
                 Class::Bar => LV_BAR_CREATE,
                 Class::Slider => LV_SLIDER_CREATE,
                 Class::Roller => LV_ROLLER_CREATE,
+                Class::Image => LV_IMG_CREATE,
                 Class::Pager | Class::PagerH => LV_TILEVIEW_CREATE,
                 Class::Page => {
                     // the next row of its pager, or the next column of a horizontal one (validated: the parent is one)
@@ -318,6 +348,15 @@ fn exec(r: &Rec) -> Result<(), i32> {
             }
         }
         Rec::AppIcon {h,slot,side} => crate::menu::lv::app_icon(o(h),slot,side)?,
+        Rec::Image { h, ptr, w, hh, cf } => {
+            // The app may have written its pixels since the package load: clean the cache so LVGL reads them.
+            wp2_core::load::sync_psram(ptr as *mut u8, u32::from(w) * u32::from(hh) * 2);
+            let d = &mut s.dsc[h as usize];
+            d.header = u32::from(cf) | u32::from(w) << 10 | u32::from(hh) << 21;
+            d.data_size = u32::from(w) * u32::from(hh) * 2;
+            d.data = ptr as *const u8;
+            stock!(LV_IMG_SET_SRC, fn(Obj, *const ImgDsc))(o(h), d);
+        }
         Rec::Size { h, w, hh } => stock!(LV_OBJ_SET_SIZE, fn(Obj, i32, i32))(o(h), w, hh),
         Rec::Align { h, align, x, y } => stock!(LV_OBJ_ALIGN, fn(Obj, u32, i32, i32))(o(h), align.into(), x.into(), y.into()),
         Rec::Flags { h, set, clear } => {
@@ -622,6 +661,7 @@ pub fn teardown() {
         }
     }
     s.fonts_open = 0;
+    s.dsc = [NO_DSC; MAX_OBJS + 1];
     s.objs = [null_mut(); MAX_OBJS + 1];
     s.events = [0; MAX_OBJS + 1];
     s.options = [0; MAX_OBJS + 1];

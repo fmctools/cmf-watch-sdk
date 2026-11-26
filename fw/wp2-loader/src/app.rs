@@ -183,6 +183,16 @@ extern "C" fn fill_rect(x: i16, y: i16, w: u16, h: u16, c: u16) {
     ui::mark(gfx::rect_box(x, y, w, h));
 }
 
+/// BLIT record (docs/bitmap-assets.md): `w * h` app-owned RGB565 pixels into the framebuffer, clipped like
+/// `fill_rect`. The pixels are range-checked against the app block in `lv::submit` before this runs.
+pub fn blit(px: *const u16, x: i16, y: i16, w: u16, h: u16) -> i32 {
+    let src = unsafe { core::slice::from_raw_parts(px, usize::from(w) * usize::from(h)) };
+    if ui::canvas().blit(x, y, w, h, src) {
+        ui::mark(gfx::rect_box(x, y, w, h));
+    }
+    0
+}
+
 extern "C" fn draw_text(x: i16, y: i16, text: *const u8, len: usize, c: u16) {
     if text.is_null() {
         return;

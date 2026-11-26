@@ -1,0 +1,17 @@
+[package]
+name = "bitmap-stream"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[dependencies]
+cmf-wp2-app = { path = "../../cmf-wp2-app" }
+
+[lib]
+name = "bitmap_stream_protocol"
+path = "src/protocol.rs"
+
+[[bin]]
+name = "bitmap-stream"
+test = false
+bench = false

@@ -26,6 +26,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "bitmap-gallery"
+version = "0.1.0"
+dependencies = [
+ "cmf-wp2-app",
+]
+
+[[package]]
+name = "bitmap-lv"
+version = "0.1.0"
+dependencies = [
+ "cmf-wp2-app",
+ "wp2-core",
+]
+
+[[package]]
+name = "bitmap-stream"
+version = "0.1.0"
+dependencies = [
+ "cmf-wp2-app",
+]
+
+[[package]]
 name = "cmf-wp2-app"
 version = "0.1.0"
 

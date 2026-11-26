@@ -32,6 +32,30 @@ impl Canvas<'_> {
         }
     }
 
+    /// Copies `w * h` row-major RGB565 pixels from `src` to (x, y), clipped to the screen like `fill_rect`.
+    /// `src` must hold at least `w * h` pixels (the loader checks that against the app block first); returns
+    /// whether any pixel landed on screen.
+    pub fn blit(&mut self, x: i16, y: i16, w: u16, h: u16, src: &[u16]) -> bool {
+        let sw = usize::from(w);
+        if sw == 0 || src.len() < sw * usize::from(h) {
+            return false;
+        }
+        let (x0, y0) = (i32::from(x).max(0), i32::from(y).max(0));
+        let (x1, y1) = ((i32::from(x) + i32::from(w)).min(W as i32), (i32::from(y) + i32::from(h)).min(H as i32));
+        if x0 >= x1 || y0 >= y1 {
+            return false;
+        }
+        let (dx, dy) = (i32::from(x), i32::from(y));
+        for row in y0..y1 {
+            let sy = (row - dy) as usize;
+            let sx = (x0 - dx) as usize;
+            let at = row as usize * W + x0 as usize;
+            let n = (x1 - x0) as usize;
+            self.px[at..at + n].copy_from_slice(&src[sy * sw + sx..sy * sw + sx + n]);
+        }
+        true
+    }
+
     // UTF-8: ASCII and Cyrillic have glyphs, everything else and every invalid byte is one `?` cell.
     pub fn text(&mut self, x: i16, y: i16, s: &[u8], c: u16) -> i16 {
         let mut cx = i32::from(x);
@@ -102,6 +126,26 @@ mod tests {
         c.fill_rect(-10, -10, 20, 20, 0xFFFF);
         c.fill_rect(460, 460, 50, 50, 0xFFFF);
         assert_eq!(px.iter().filter(|&&p| p == 0xFFFF).count(), 100 + 36);
+    }
+
+    #[test]
+    fn blit_clips_and_keeps_order() {
+        let src: Vec<u16> = (1..=100).collect();
+        let mut px = vec![0u16; W * H];
+        assert!(Canvas { px: &mut px }.blit(460, 460, 10, 10, &src), "6 x 6 land");
+        assert_eq!(px[460 + 466 * 460], 1, "top-left of the source, clipped");
+        assert_eq!(px[465 + 466 * 465], 56, "source row 6, col 6");
+        assert_eq!(px.iter().filter(|&&p| p != 0).count(), 36);
+
+        let mut px = vec![0u16; W * H];
+        assert!(Canvas { px: &mut px }.blit(-3, -2, 5, 4, &src), "part on screen");
+        assert_eq!(px[0], 14, "source (3, 2)");
+        assert_eq!(px[1 + 1 * W], 20, "source (4, 3)");
+        assert_eq!(px.iter().filter(|&&p| p != 0).count(), 4);
+
+        let mut px = vec![0u16; W * H];
+        assert!(!Canvas { px: &mut px }.blit(500, 0, 4, 4, &src), "off screen");
+        assert!(!Canvas { px: &mut px }.blit(0, 0, 4, 4, &src[..3]), "short source");
     }
 
     #[test]

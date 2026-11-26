@@ -30,6 +30,8 @@ if compgen -G "$icons/*.svg" >/dev/null; then
     done
     pack_icons=(--widget-icons "$out")
 fi
+# bitmap assets (docs/bitmap-assets.md): bitmaps/*.png -> src/bitmaps.gen.rs for bitmaps!()
+(cd "$root" && uv run --locked python -m wp2apps.bitmaps "$root/sdk/examples/$name")
 (cd "$root/sdk" && cargo build --release -p "$name")
 mkdir -p "$root/target"
 llvm-objcopy -O binary --set-section-flags .data=alloc,load,contents "$root/sdk/target/thumbv7em-none-eabi/release/$name" "$root/target/$name.bin"

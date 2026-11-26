@@ -262,6 +262,7 @@ fn rgb(r: u32, g: u32, b: u32) -> u16 {
 | Image | ≤ 128 KiB (`APP_SIZE = 0x20000`): icon + code + rodata + data **+ bss** | `fw/wp2-core/src/layout.rs`, `sdk/cmf-wp2-app/app.ld`, `wp2apps pack` refuses more |
 | Icon | 27 664 B of the image (16 B descriptor + 96·96·3) | `docs/app-icons.md` |
 | Statics | `.bss` is written into the image as zeros (`llvm-objcopy --set-section-flags .data=alloc,load,contents`), so a `static mut [u8; 8192]` adds 8 KiB to the package and the install. They start fresh on every launch: the image is reloaded from NAND | `scripts/build-app`, `fw/wp2-core/src/load.rs` |
+| Bitmaps | pixels of `bitmaps/*.png` live in the image like any static: keep **all bitmap pixels ≤ 48 KiB** and every side ≤ 466 px so code + data + the 27 664 B menu icon still fit the 131 072 B package; a full-screen image (434 312 B) can never be baked | `docs/bitmap-assets.md`, `wp2apps.bitmaps` |
 | Stack | 8 KiB (`0x2000`), no guard: an overflow corrupts the thread struct. Put buffers over ~1 KiB in a `static mut` (api-demo `SCRATCH`, herdr-agents `STORE`) | `fw/wp2-loader/src/app.rs`, `ThreadBuf` |
 | Heap | none: no allocator, no `alloc`. Fixed arrays only | |
 | Floats | compile to soft-float library calls (target is `eabi`, not `eabihf`): an `f32` multiply linked `__aeabi_fmul` and grew `.text` by ~600 B. No shipped app uses floats on the device; use integers and fixed point (`sin`/`cos` in Q14 in `agent-glow/src/glow.rs`) | build check in this guide's scratch |
@@ -299,6 +300,7 @@ inside the app (there is no wrapper). `cmf_wp2_app::api()` returns `Some(&Api)` 
 |---|---|
 | `rect(x: i16, y: i16, w: u16, h: u16, rgb565: u16)` | Fills a rectangle, clipped to the screen. The only drawing primitive: discs, rings and AA edges are built from 1 px rows (see section 5) |
 | `text(x: i16, y: i16, text: &str, rgb565: u16)` | Top-left of the first 16×16 cell at (x, y). Draws only the glyph pixels (transparent background): clear the area first with `rect`. ASCII and Cyrillic `А–я`, `Ё`, `ё` have glyphs; any other char and every invalid UTF-8 byte draws one `?` cell (`fw/wp2-core/src/gfx.rs`). **At most 64 bytes per call** (`TEXT_MAX`, `fw/wp2-loader/src/app.rs`): longer text is cut silently, which is 32 Cyrillic chars. No wrapping, no width query: width = 16 × chars |
+| `pixels(px: &[u16], x: i16, y: i16, w: u16, h: u16)` | Draws `w * h` row-major RGB565 pixels at (x, y), clipped like `rect`; `0`, or `-1` for a side outside 1..=466 or a short `px` (docs/bitmap-assets.md). One copy on a loader with bitmaps; on an older loader or the simulator the same picture falls back to spans of `rect` |
 | `show()` | Publishes what was drawn since the last `show` (see "What is slow"). Without it nothing is guaranteed to reach the panel. While paused the box stays pending and the loader repaints everything on resume |
 
 ### Waiting and events
@@ -814,7 +816,7 @@ loop {
 | LVGL with a framebuffer fallback (simulator); a growing log, newest on top, oldest deleted | `api-demo/src/main.rs`, `log.rs` |
 | Text into a buffer with `core::fmt::Write` | `Buf<N>` in `api-demo/src/main.rs` |
 
-Missing today: bitmaps (only `rect`; the icon path is loader-only), touch move, gestures and long press, the accelerometer
+Missing today: touch move, gestures and long press, the accelerometer
 (looked at and not shipped, `docs/abi-1.1.md`; heart rate and GPS ship as `heart_rate` and `gps`), a notice before the screen
 blanks, a random source and a phone-side host. In the kit: rounded arc caps, a scroll bar widget, and a ring that
 repaints only the changed sector.
@@ -1009,6 +1011,9 @@ screen builder (`src/screen.rs`) is host-tested: each batch validates against th
   `-12` and changes nothing; the SDK's handle table is then out of step, so treat it as a bug.
 - **Lifetime.** Exit, crash, force stop and view delete delete the root, every object and the fonts. An app has
   nothing to free. `BUTTON` still gives it 1 s.
+- **Bitmaps.** `Batch::image` makes an `lv_img` object and `Batch::set_image` points it at `&'static [u16]` pixels
+  the app carries (`bitmaps/*.png`, docs/bitmap-assets.md): drawn in place, one handle, re-submit after changing
+  the pixels. An older loader answers `-22`; fall back to no image as with `widget_columns`.
 
 ### Testing LVGL apps
 

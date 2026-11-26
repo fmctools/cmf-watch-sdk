@@ -6,6 +6,8 @@ app=${1:?usage: scripts/sim <app> [options]}
 shift
 host=$(rustc -vV | sed -n 's/^host: //p')
 lib=$root/sim/target/release
+# bitmap assets (docs/bitmap-assets.md): bitmaps/*.png -> src/bitmaps.gen.rs for bitmaps!()
+(cd "$root" && uv run --locked python -m wp2apps.bitmaps "$root/sdk/examples/$app")
 (cd "$root/sim" && cargo build --release -q)
 # the app as a host binary: cmf_wp2_app::entry! calls wp2_sim_run from libwp2_sim; no overflow checks, like the
 # watch's release build

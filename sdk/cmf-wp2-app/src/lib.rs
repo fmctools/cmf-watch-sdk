@@ -157,6 +157,25 @@ pub struct Battery {
     pub charger: bool,
 }
 
+/// One bitmap asset carried in the app's package: `w * h` row-major RGB565 pixels (2 bytes per pixel), generated
+/// from `bitmaps/*.png` next to `Cargo.toml` by `python -m wp2apps.bitmaps` (`scripts/build-app` runs it) behind
+/// [`bitmaps!`]. Draw it with [`Api::pixels`] (canvas apps) or [`lv::Batch::set_image`] (LVGL apps); see
+/// docs/bitmap-assets.md for the limits.
+#[derive(Clone, Copy)]
+pub struct Bitmap {
+    pub w: u16,
+    pub h: u16,
+    pub px: &'static [u16],
+}
+
+impl Bitmap {
+    /// `false` when a side is outside 1..=466 or `px` does not hold exactly `w * h` pixels (drawing refuses it).
+    pub fn ok(&self) -> bool {
+        (1..=466).contains(&self.w) && (1..=466).contains(&self.h)
+            && self.px.len() == usize::from(self.w) * usize::from(self.h)
+    }
+}
+
 impl Api {
     pub fn rect(&self, x: i16, y: i16, w: u16, h: u16, rgb565: u16) {
         (self.fill_rect)(x, y, w, h, rgb565)
@@ -165,6 +184,45 @@ impl Api {
     /// 8x8 font at 2x, 16 px per char. ASCII and Cyrillic (А-я, Ё, ё) have glyphs, any other char draws as `?`.
     pub fn text(&self, x: i16, y: i16, text: &str, rgb565: u16) {
         (self.draw_text)(x, y, text.as_ptr(), text.len(), rgb565)
+    }
+
+    /// Draws a bitmap: `w * h` row-major RGB565 pixels at (x, y), clipped to the screen (docs/bitmap-assets.md).
+    /// On a loader with bitmap assets and pixels inside the app block (a `static` or a generated bitmap) this is a
+    /// single row-wise copy. Older loaders, the simulator, and pixels outside the app block fall back to the same
+    /// picture in spans of [`Api::rect`], so the call always draws. Returns `0`, or `-1` for a side outside 1..=466
+    /// or a `px` shorter than `w * h`. Canvas apps only: an LVGL screen replaces the framebuffer, so LVGL apps show
+    /// images with [`lv::Batch::set_image`] instead.
+    pub fn pixels(&self, px: &[u16], x: i16, y: i16, w: u16, h: u16) -> i32 {
+        if !(1..=466).contains(&w) || !(1..=466).contains(&h) || px.len() < usize::from(w) * usize::from(h) {
+            return -1;
+        }
+        if self.abi_minor >= 2 {
+            // lv_submit takes a record in the app block: a static, not the stack (like HEART_ON)
+            static mut BUF: [u8; 16] = [0x1B, 12, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+            let buf = unsafe { &mut *core::ptr::addr_of_mut!(BUF) };
+            buf[4..8].copy_from_slice(&(px.as_ptr() as u32).to_le_bytes());
+            buf[8..10].copy_from_slice(&x.to_le_bytes());
+            buf[10..12].copy_from_slice(&y.to_le_bytes());
+            buf[12..14].copy_from_slice(&w.to_le_bytes());
+            buf[14..16].copy_from_slice(&h.to_le_bytes());
+            if (self.lv_submit)(buf.as_ptr(), buf.len()) == 0 {
+                return 0;
+            }
+        }
+        // Fallback: merge equal neighbours into spans, one rect per span (fast path refused or absent)
+        for row in 0..usize::from(h) {
+            let r = &px[row * usize::from(w)..(row + 1) * usize::from(w)];
+            let mut a = 0;
+            while a < r.len() {
+                let mut b = a + 1;
+                while b < r.len() && r[b] == r[a] {
+                    b += 1;
+                }
+                self.rect(x.saturating_add(a as i16), y.saturating_add(row as i16), (b - a) as u16, 1, r[a]);
+                a = b;
+            }
+        }
+        0
     }
 
     pub fn show(&self) {
@@ -517,6 +575,22 @@ macro_rules! app_icon {
     () => {};
 }
 
+/// The app's bitmap assets: includes `src/bitmaps.gen.rs`, generated from `bitmaps/*.png` next to `Cargo.toml`
+/// (`scripts/build-app` and `scripts/sim` regenerate it). The file declares `pub mod bitmaps` with one
+/// [`Bitmap`] per PNG, named after the file (kebab-case becomes snake_case): `logo.png` is `bitmaps::LOGO`.
+/// Call it at module level, next to `entry!`:
+///
+/// ```ignore
+/// cmf_wp2_app::bitmaps!();
+/// use bitmaps::LOGO;
+/// ```
+#[macro_export]
+macro_rules! bitmaps {
+    () => {
+        include!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/bitmaps.gen.rs"));
+    };
+}
+
 /// `app_features!` flag: the app has a widget for the cards left of the watch face (`Api::widget`); the Apps menu
 /// offers "Add widget" on a long press.
 pub const WIDGET: u8 = 1;
@@ -679,5 +753,60 @@ mod tests {
     fn battery_bits() {
         let b = table(ABI, ABI_MINOR).battery().unwrap();
         assert_eq!((b.percent, b.charging, b.full, b.charger), (0x40, true, false, false));
+    }
+
+    static RECTS: core::sync::atomic::AtomicUsize = core::sync::atomic::AtomicUsize::new(0);
+    static CAP_LEN: core::sync::atomic::AtomicUsize = core::sync::atomic::AtomicUsize::new(0);
+    static mut CAP: [u8; 16] = [0; 16];
+
+    extern "C" fn count_rect(_: i16, _: i16, _: u16, _: u16, _: u16) {
+        RECTS.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+    }
+    extern "C" fn refuse(_: *const u8, _: usize) -> i32 {
+        -22
+    }
+    extern "C" fn capture(buf: *const u8, len: usize) -> i32 {
+        let r = unsafe { core::slice::from_raw_parts(buf, len) };
+        let out = unsafe { &mut *core::ptr::addr_of_mut!(CAP) };
+        out.fill(0);
+        out[..r.len()].copy_from_slice(r);
+        CAP_LEN.store(r.len(), core::sync::atomic::Ordering::Relaxed);
+        0
+    }
+
+    #[test]
+    fn pixels_records_then_falls_back_to_rects() {
+        use core::sync::atomic::Ordering;
+        let px = [7u16, 7, 9, 9, 1, 2, 3, 4];
+        let mut api = table(ABI, ABI_MINOR);
+        api.fill_rect = count_rect;
+        api.lv_submit = capture;
+
+        let mut want = std::vec![0x1B, 12, 0, 0];
+        want.extend_from_slice(&(px.as_ptr() as u32).to_le_bytes());
+        want.extend_from_slice(&(-1i16).to_le_bytes());
+        want.extend_from_slice(&2i16.to_le_bytes());
+        want.extend_from_slice(&4u16.to_le_bytes());
+        want.extend_from_slice(&2u16.to_le_bytes());
+        RECTS.store(0, Ordering::Relaxed);
+        assert_eq!(api.pixels(&px, -1, 2, 4, 2), 0);
+        assert_eq!(CAP_LEN.load(Ordering::Relaxed), want.len(), "BLIT record");
+        assert_eq!(unsafe { &CAP[..want.len()] }, &want[..]);
+        assert_eq!(RECTS.load(Ordering::Relaxed), 0, "the fast path draws no rects");
+
+        // an old loader refuses the record: the same picture, one rect per equal-neighbour span
+        api.lv_submit = refuse;
+        RECTS.store(0, Ordering::Relaxed);
+        assert_eq!(api.pixels(&px, -1, 2, 4, 2), 0);
+        assert_eq!(RECTS.load(Ordering::Relaxed), 6, "row 0 has 2 spans, row 1 has 4");
+
+        assert_eq!(api.pixels(&px[..3], 0, 0, 4, 2), -1, "short pixels");
+        assert_eq!(api.pixels(&px, 0, 0, 0, 2), -1, "zero width");
+        assert_eq!(api.pixels(&px, 0, 0, 467, 1), -1, "wider than the screen");
+
+        api.abi_minor = 1; // no lv_submit in the table: straight to the fallback
+        RECTS.store(0, Ordering::Relaxed);
+        assert_eq!(api.pixels(&px, 0, 0, 4, 2), 0);
+        assert_eq!(RECTS.load(Ordering::Relaxed), 6);
     }
 }
