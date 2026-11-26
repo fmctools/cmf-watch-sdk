@@ -25,7 +25,7 @@ fn status(api: &Api, text: &str, colour: u16) {
 
 fn main(api: &'static Api) -> i32 {
     let mut receiving: Option<(u16, u16)> = None;
-    status(api, "send an image", 0x8410);
+    status(api, "waiting for photo...", 0x8410);
     loop {
         let Some(event) = api.event(u32::MAX) else { continue };
         match event.kind {

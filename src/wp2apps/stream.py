@@ -84,7 +84,7 @@ def main(argv=None) -> int:
     try:
         n = asyncio.run(run())
     except (OSError, ValueError, TimeoutError) as error:
-        print(f"Error: {error}", file=sys.stderr)
+        print(f"Error: {error or type(error).__name__}", file=sys.stderr)
         return 1
     print(f"{a.png.name}: {n} messages sent")
     return 0
