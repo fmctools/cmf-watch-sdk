@@ -87,18 +87,18 @@ extern "C" fn wp3_boot_c() {
     ram.version_magic = VERSION_MAGIC;
 }
 
-// ResFbHeap blocks through the stock UI allocator (type 2), as the stock app list allocates its icons
-const RES: u32 = 2;
+// ResFbHeap blocks through the stock UI allocator (type 2), as the stock app list allocates its icons. Never the
+// allocator directly: it does not return NULL but spins in its failure hook until the watchdog resets the watch
+// (docs/recon.md, "JHeap never returns NULL"). `port::alloc` checks the free list first (under BASEPRI) and returns
+// NULL when the block would not fit, so a caller just skips what it wanted to draw.
+const RES: u32 = wp2_core::heap::RES;
 
 pub(crate) fn alloc(size: u32) -> *mut u8 {
-    let f: extern "C" fn(u32, u32, u32, *const u8) -> *mut u8 =
-        unsafe { core::mem::transmute(model::WP3.ui_mem_aligned_alloc as usize) };
-    f(RES, 0x40, size, b"wp3s\0".as_ptr())
+    wp2_core::port::alloc(&model::WP3, RES, size, 0x40)
 }
 
 pub(crate) fn free(block: *mut u8) {
-    let f: extern "C" fn(u32, *mut u8) = unsafe { core::mem::transmute(model::WP3.ui_mem_free as usize) };
-    f(RES, block)
+    unsafe { wp2_core::port::free(&model::WP3, RES, block) }
 }
 
 #[unsafe(no_mangle)]
