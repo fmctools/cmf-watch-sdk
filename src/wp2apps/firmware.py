@@ -4,6 +4,8 @@ import re
 import struct
 import zlib
 
+from . import fmclabel
+
 STOCK_SHA256_PREFIX = "30e7978c39d8fb79"
 STUB_OFFSET = 0x25A080
 HEAP_LITERALS = (0x188508, 0x188588, 0x1885F4)
@@ -251,9 +253,9 @@ def _swap_hook(out: bytearray, at: int, target: int) -> int:
 
 
 def patch(app: bytes, stub: bytes | None = None, *, motor: int | None = None, reserve: bool = True,
-          weak: int | None = None, _verify: bool = True) -> bytes:
+          weak: int | None = None, label: bool = False, _verify: bool = True) -> bytes:
     """motor: stock vibrations at this many permille of their strength; reserve: the loader's heap reservation;
-    weak: a fourth vibration level at this many permille."""
+    weak: a fourth vibration level at this many permille; label: "<version>-fmc" on the About page (add_fmc_label)."""
     if _verify and not hashlib.sha256(app).hexdigest().startswith(STOCK_SHA256_PREFIX):
         raise ValueError("not the stock JX402 1.0.0.73 app.bin (sha256 mismatch)")
     if stub is not None and not reserve:
@@ -273,8 +275,10 @@ def patch(app: bytes, stub: bytes | None = None, *, motor: int | None = None, re
     if stub is not None:
         add_stub(out, stub)
     out += bytes(-len(out) % 4)
+    if label:
+        add_fmc_label(out, app)
     # stock size stops before the appended ksdfs tail; appended code must be covered
-    fix_acth(out, None if stub is not None else size)
+    fix_acth(out, None if stub is not None or label else size)
     check_acth(out)
     return bytes(out)
 
@@ -325,13 +329,15 @@ def put_guard(out: bytearray, sites: tuple, hooks: list[int]) -> None:
         put(out, at, thumb_bl(at, stock), thumb_bl(at, hooks[hook] & ~1))
 
 
-def patch_wp3(app: bytes, stub: bytes) -> bytes:
+def patch_wp3(app: bytes, stub: bytes, *, label: bool = False) -> bytes:
     """Watch 3 Pro: appends fw/wp3-stub and points the GUARD_WP3 calls at it; a version 2 stub also gets the
-    WP3_APPLIST slots and a view-table record for WP3_VIEW_ID (add_stub_wp3)."""
+    WP3_APPLIST slots and a view-table record for WP3_VIEW_ID (add_stub_wp3). label: add_fmc_label after the stub."""
     if not hashlib.sha256(app).hexdigest().startswith(WP3_STOCK_SHA256_PREFIX):
         raise ValueError("not the stock jx402_08 1.0.1.77 app.bin (sha256 mismatch)")
     out = bytearray(app)
     add_stub_wp3(out, stub)
+    if label:
+        add_fmc_label(out, app)
     fix_acth(out)
     check_acth(out)
     return bytes(out)
@@ -388,6 +394,33 @@ def add_stub_wp3(out: bytearray, stub: bytes) -> None:
             put(out, lit, struct.pack("<I", WP3_HEAP_OLD), struct.pack("<I", WP3_HEAP_NEW))
         put(out, WP3_BOOT_CALL, thumb_bl(WP3_BOOT_CALL, WP3_STOCK_HEAP_INIT), thumb_bl(WP3_BOOT_CALL, boot & ~1))
         put(out, WP3_BLE_CALL, thumb_bl(WP3_BLE_CALL, WP3_STOCK_BLE_READ), thumb_bl(WP3_BLE_CALL, ble & ~1))
+
+
+def add_fmc_label(out: bytearray, stock: bytes) -> str:
+    """Settings > About shows "<version>-fmc" (fmclabel, docs/recon.md "About page label"); every machine-readable
+    version (AT GETVERSION, the BLE replies, the OTA version code) stays stock. Sites are located in the `stock`
+    image; the new bytes are appended to `out` (4-aligned), so call it after the stub and fix the ACTH after it.
+    WP3 shape: the page's format pool word points at "%s-fmc" + the rest of the stock format (data only). Otherwise
+    the page's `add.w rD, sp, #..` becomes `bl thunk`, thunk = `ldr rD, [pc, #0]; bx lr; .word label`: the page
+    already called the info getter, so its lr is saved. Returns the label."""
+    sites = fmclabel.locate(stock)
+    label = sites.label
+    out += bytes(-len(out) % 4)
+    at = APP_VBASE + len(out)
+    if sites.fmt_pool_off is not None:
+        word = sites.fmt_pool_off
+        old = struct.unpack_from("<I", stock, word)[0]
+        put(out, APP_VBASE + word, struct.pack("<I", old), struct.pack("<I", at))
+        out += sites.fmt.replace(b"%s", b"%s" + fmclabel.SUFFIX.encode(), 1) + b"\0"
+    else:
+        if sites.page_rd > 7:
+            raise ValueError(f"About page site uses r{sites.page_rd}; the thunk needs r0..r7")
+        add = sites.page_add
+        old = stock[add - APP_VBASE:add - APP_VBASE + 4]
+        out += struct.pack("<HHI", 0x4800 | sites.page_rd << 8, 0x4770, at + 8) + label.encode() + b"\0"
+        put(out, add, old, thumb_bl(add, at))
+    out += bytes(-len(out) % 4)
+    return label
 
 
 def changed_ranges(old: bytes, new: bytes, gap: int = 16) -> list[tuple[int, int]]:

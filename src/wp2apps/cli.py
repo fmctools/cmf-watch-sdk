@@ -54,10 +54,11 @@ def cmd_firmware(args):
         if not stub or args.motor_only or args.motor != 1000:
             raise ValueError("--model wp3 takes only --stub (target/wp3-stub.bin)")
         with args.output.open("xb") as out:
-            out.write(firmware.patch_wp3(paths.stock_app_wp3(), stub))
+            out.write(firmware.patch_wp3(paths.stock_app_wp3(), stub, label=not args.no_fmc_label))
         return
     motor = None if args.motor == 1000 else args.motor
-    data = firmware.patch(paths.stock_app(), stub, motor=motor, reserve=not args.motor_only, weak=None if args.motor_only else args.weak or None)
+    data = firmware.patch(paths.stock_app(), stub, motor=motor, reserve=not args.motor_only, weak=None if args.motor_only else args.weak or None,
+                          label=not (args.no_fmc_label or args.motor_only))
     with args.output.open("xb") as out:
         out.write(data)
 
@@ -361,7 +362,10 @@ def parser():
     fw.add_argument("--weak", type=int, default=350, metavar="PERMILLE",
                     help="a fourth vibration level in Settings at this share (default 350; 0: none)")
     fw.add_argument("--motor-only", action="store_true",
-                    help="only the motor patch: no heap reservation, no stub, stock app.bin size")
+                    help="only the motor patch: no heap reservation, no stub, no label, stock app.bin size")
+    fw.add_argument("--no-fmc-label", action="store_true",
+                    help="keep the stock About page; by default Settings > About shows '<version>-fmc' "
+                         "(AT GETVERSION and every other version stay stock)")
     fw.add_argument("--output", type=Path, required=True)
     fw.set_defaults(handler=cmd_firmware)
     ota = commands.add_parser("ota-image", help="Full stock firmware image carrying a patched app.bin")

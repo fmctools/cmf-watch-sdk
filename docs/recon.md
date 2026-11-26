@@ -894,3 +894,28 @@ the setup screens; boot 1 always reboots out of setup).
 Not covered beyond the list above: a face that really faults 1.0.1.77; OTA of the image (the emulator installs only
 WP2's; this one is checked by unpacking it and by `fwkit verify`); the 3 Pro emulator profile is experimental
 (synthetic storage layout).
+
+## About page label (`<version>-fmc`)
+
+Purpose: custom firmware is easy to tell apart on the watch itself. Settings > About shows `1.0.0.73-fmc` /
+`1.0.1.77-fmc`, while every machine-readable version stays stock: `AT GETVERSION`, the BLE version replies and the
+OTA version code (`ota.xml`, not in app.bin), so the phone apps and the update path see a stock version.
+`wp2apps firmware` adds it by default (`--no-fmc-label` keeps the stock page; `--motor-only` never has it).
+
+`wp2apps/fmclabel.py` finds the sites by signature, each step refusing unless it finds exactly one match, so it
+carries to later stock releases (the addresses below are for these two builds only):
+
+| Step | WP2 1.0.0.73 | Watch 3 Pro 1.0.1.77 |
+|---|---|---|
+| version string: the only `N.N.N.N\0` with pool references | file `0x203A35` | file `0x23AA9A` |
+| info fill `movs r2,#0x14; ldr r1,=version; add.w r0,r4,#F; bl`: field F of info record `0x11` | F = `0x3F`, pool word `0xE1B2C` | F = `0x49`, pool word `0xDB7DC` |
+| `about_view` record in the view table (view `0x4E`), its proc | `0x10001340`, `0x100BF9F9` | `0x100012E0`, `0x100B3185` |
+| near the proc: `add r1,sp,#B; movs r0,#0x11; bl get_info`, then `add.w rD,sp,#(B+F)` | `0x100BFCB8`, `add.w r1,sp,#0x4B` at `0x100BFF60` | `0x100B2BFC`, `add.w r3,sp,#0xD1` at `0x100B2E00` |
+| format pool word (only when rD = r3, after `ldr r2,=fmt`) | none (r1 goes straight to the label) | `0xB2F38`, `"%s\n(%s %s)"` |
+
+Patch (`firmware.add_fmc_label`, appended after the stub, then the ACTH is fixed): with a format word, the word points
+at an appended `"%s-fmc\n(%s %s)"` (data only; `snprintf(.., 0x80, ..)` has room). Otherwise the page's `add.w`
+becomes `bl thunk`, thunk `ldr rD,[pc,#0]; bx lr; .word "<version>-fmc"` (the page called the info getter just
+before, so its lr is saved). The info pool word is never patched: it feeds `AT GETVERSION` too (tried in the
+emulator: `GETVERSION:1.0.1.77-fmc`). Emulator (virtual BLE only): both models show the label on the About page,
+`AT GETVERSION` answers the stock version, and three boots each are clean.

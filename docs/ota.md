@@ -5,6 +5,10 @@
 partitions (`res`, `fonts`, `res_e`, `sdfs_k`, AGPS trailer) are stock. `make fw-motor` uses the same builder for
 the motor-only image.
 
+The patched `app.bin` also labels Settings > About as `<version>-fmc` (`wp2apps firmware --no-fmc-label` leaves it
+out), so custom firmware is easy to identify on the watch itself. Every machine-readable version stays stock:
+`AT GETVERSION`, the BLE version replies and the OTA `version_code` (docs/recon.md "About page label").
+
 ## How it is built (`wp2apps ota-image`)
 
 - The stub grows `app.bin` from `0x25A080` to `0x25CDE8` bytes, so `fwkit edit-app` (in-place patches) cannot carry
