@@ -104,7 +104,9 @@ uv run --locked python -m wp2apps.stream photo.png --tcp 8765
 
 The receiver keeps **no image buffer**: every chunk is blitted straight into the framebuffer (progressive reveal),
 so streaming a full screen costs one screen of RAM — zero — but the whole picture must fit the screen and the app
-must stay running. A `static` buffer alternative would be package-bounded like every other static.
+must stay running. It draws the picture **centred**: the panel is a disc, and a corner-anchored image (0,0) lies
+entirely outside the visible area (app-guide, "Safe area"). A `static` buffer alternative would be package-bounded
+like every other static.
 
 Practical limits today:
 

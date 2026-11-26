@@ -40,6 +40,9 @@ fn main(api: &'static Api) -> i32 {
                         }
                         Some(Msg::Data { offset, payload }) => {
                             let Some((w, h)) = receiving else { continue };
+                            // centre it: the panel is a disc, so a picture tucked into the corner (0,0) would be
+                            // cut away entirely (app-guide "Safe area")
+                            let (ox, oy) = ((api.width - w) / 2, (api.height - h) / 2);
                             // payload starts at byte 6 of a 2-aligned buffer: aligned RGB565 words
                             let words = unsafe {
                                 core::slice::from_raw_parts(payload.as_ptr() as *const u16, payload.len() / 2)
@@ -47,11 +50,17 @@ fn main(api: &'static Api) -> i32 {
                             // Progressive reveal: every chunk goes straight into the framebuffer (no image buffer),
                             // so the whole streamed picture costs one 466x466 screen at most.
                             for (x, y, n, src) in segments(offset, payload.len(), w as usize, h as usize) {
-                                api.pixels(&words[src..src + n], x as i16, y as i16, n as u16, 1);
+                                api.pixels(&words[src..src + n], (ox + x as u16) as i16, (oy + y as u16) as i16,
+                                           n as u16, 1);
                             }
                             api.show();
                         }
-                        Some(Msg::Done) if receiving.is_some() => status(api, "done", 0x3B69),
+                        Some(Msg::Done) if receiving.is_some() => {
+                            // keep the picture: only the status line at the bottom changes
+                            api.rect(0, 216, api.width, 24, 0);
+                            status_line(api, "done", 0x3B69);
+                            api.show();
+                        }
                         _ => {}
                     }
                 }
@@ -67,4 +76,8 @@ fn main(api: &'static Api) -> i32 {
             _ => {}
         }
     }
+}
+
+fn status_line(api: &Api, text: &str, colour: u16) {
+    api.text(centre(text), 224, text, colour);
 }
