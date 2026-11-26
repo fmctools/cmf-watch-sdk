@@ -120,6 +120,9 @@ unsafe fn add_row(view: *mut u8) {
     let row = stock!(M.lv_obj_create, fn(Obj) -> Obj)(cont);
     let img = if row.is_null() { row } else { stock!(M.simple_img_create, fn(Obj) -> Obj)(row) };
     if img.is_null() {
+        if !row.is_null() {
+            stock!(M.lv_obj_del, fn(Obj) -> ())(row); // no empty row in the list (the fisheye walks every child)
+        }
         free(block);
         return;
     }
@@ -150,7 +153,10 @@ unsafe fn add_row(view: *mut u8) {
 }
 
 // One more icon after the stock ones (`applist_grid_layout`): the stock position function takes the count from the
-// container and the objects from a 30-pointer array, so the entry needs a stock entry to be hidden.
+// container and the objects from a 30-pointer array, so the entry needs a stock entry to be hidden. Known limitation:
+// with all three optional stock entries shown (27 + 3 = 30) the Grid has no Apps icon (the List still has its row).
+// The array is full then and the word after it is the container pointer (`applist_grid_cont`), so a 31st object
+// cannot go in, and the place function would read that word as the 31st object (docs/recon.md, "Apps in the Grid").
 unsafe fn add_icon(view: *mut u8) {
     let Some((data, cont, shown)) = (unsafe { stock_state(view, GRID_CONT, GRID_COUNT) }) else { return };
     if shown >= ENTRIES {

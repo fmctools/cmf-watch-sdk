@@ -845,6 +845,14 @@ appends `{name, proc, 0, u16 0x147, 0x102, 466, 466}` and repoints `0x101A1304`/
 pages will be 0x151 and up, above the wake bound 0x150 (wp2-core `model.rs`, `menu_view`). Every address the stub
 uses comes from `model::WP3`.
 
+Apps in the Grid: the grid layout fills a 30-pointer object array (`applist_grid_objs`, data `+0x16C`) directly
+followed by the container (`+0x1E4`) and the count, and the place function `0x101C70EB` reads one pointer per child
+of the container. The Apps icon takes the slot of a hidden optional entry, so with all three optional entries shown
+(27 + 3 = 30) the Grid has no Apps icon; the List keeps its row. The icon blocks (List 96 px ≈ 28 KB, Grid 160 px
+≈ 77 KB) and the menu's state come from the ResFbHeap through wp2-core `port::alloc`, which checks the free list
+first: the stock allocator never returns NULL (see "JHeap never returns NULL" above), so a direct call on a low heap
+resets the watch, while a failed check only leaves the entry out.
+
 Header version 3 adds the install channel: a boot hook at `bl stock_heap_init` (`0x1019C646`; StubRam = the top
 4 KiB of the ResFbHeap, whose size literals `0x1019C654`/`0x1019C700`/`0x1019C76C` go from `0x636B00` to `0x635B00`,
 StubRam at `0x3871ECC0`) and a hook at `bl read_payload` in the BLE dispatcher's default branch (`0x100C253A`,
