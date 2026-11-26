@@ -1,11 +1,11 @@
 // ABI 1.1 services (docs/abi-1.1.md): host channel, app data, time, battery, screen wake lock.
 use core::sync::atomic::{AtomicBool, AtomicU8, Ordering};
-use wp2_core::chan::{listening, parse_store, store_header, Ring, MSG_MAX, STORE_HEADER, STORE_MAX};
+use crate::plat::listening; use wp2_core::chan::{parse_store, store_header, Ring, MSG_MAX, STORE_HEADER, STORE_MAX};
 use wp2_core::events::{Event, Time, MESSAGE};
-use wp2_core::fs;
-use wp2_core::layout::{data_path, stub_ram, APP_PAUSED, APP_V11, E_IO, KICK_MAGIC};
+use crate::plat::fs;
+use crate::plat::stub_ram; use wp2_core::layout::{data_path, APP_PAUSED, APP_V11, E_IO, KICK_MAGIC};
 use wp2_core::pkg::crc32;
-use wp2_core::stock::*;
+use crate::plat::stock::*;
 
 use crate::app::NONE;
 
@@ -14,7 +14,7 @@ const E_AGAIN: i32 = -11;
 const E_NOTCONN: i32 = -107;
 // rtc_app: signed zone hours/minutes at +0/+1, the RTC device at +4 (0x100C14B4, 0x100C1458)
 const RTC_APP: u32 = 0x2FFB_449C;
-const WAKE_ID: u32 = 0xF0;
+use crate::plat::view::WAKE_ID;
 const ZONE_MAX: i32 = 14 * 3600;
 
 // inbox position up to which MESSAGE events went out (app thread)
@@ -216,7 +216,7 @@ pub extern "C" fn load(buf: *mut u8, cap: usize) -> i32 {
     if bad { E_IO } else { 0 }
 }
 
-pub extern "C" fn time(out: *mut Time) -> i32 {
+pub extern "C" fn time(out: *mut Time) -> i32 { #[cfg(feature = "wp3")] return crate::plat::time(out); // UTC API
     if out.is_null() || unsafe { ((RTC_APP + 4) as *const u32).read_volatile() } == 0 {
         return E_IO;
     }

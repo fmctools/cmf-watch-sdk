@@ -8,7 +8,7 @@ use core::ptr::addr_of_mut;
 use core::sync::atomic::{AtomicBool, AtomicI32, AtomicU32, AtomicU8, Ordering};
 use wp2_core::events::{Event, MEDIA};
 use wp2_core::lvcmd;
-use wp2_core::stock::*;
+use crate::plat::stock::*;
 
 const E_NODEV: i32 = -19;
 const POLL_MS: u32 = 1000;
@@ -59,7 +59,7 @@ pub fn send(cmd: u8) {
 }
 
 // app thread (lv_submit): 0, or -19 without a phone link or phone media
-pub fn key(cmd: u8) -> i32 {
+pub fn key(cmd: u8) -> i32 { #[cfg(feature = "wp3")] return crate::plat::E_NODEV; // phone media: M3
     RESULT.store(WAITING, Ordering::Relaxed);
     CMD.store(cmd, Ordering::Release);
     loop {
@@ -72,7 +72,7 @@ pub fn key(cmd: u8) -> i32 {
 }
 
 // app thread (lv_submit), labels checked
-pub fn bind(on: bool, title: u16, artist: u16) {
+pub fn bind(on: bool, title: u16, artist: u16) { #[cfg(feature = "wp3")] return;
     LABELS.store(u32::from(title) << 16 | u32::from(artist), Ordering::Relaxed);
     if on {
         unsafe { (*addr_of_mut!(STATE)).last = None };
@@ -91,7 +91,7 @@ fn set_text(h: u16, text: &[u8]) {
 }
 
 // UI tick
-pub fn tick(running: bool, paused: bool) {
+pub fn tick(running: bool, paused: bool) { #[cfg(feature = "wp3")] return;
     let cmd = CMD.swap(0, Ordering::Acquire);
     if cmd != 0 {
         let r = if available() {
@@ -125,7 +125,7 @@ pub fn tick(running: bool, paused: bool) {
 }
 
 // UI thread, app thread aborted
-pub fn stop() {
+pub fn stop() { #[cfg(feature = "wp3")] return;
     BOUND.store(false, Ordering::Release);
     CMD.store(0, Ordering::Relaxed);
     unsafe { (*addr_of_mut!(STATE)).info = [0; 0x82] };

@@ -1,6 +1,6 @@
 [package]
 name = "wp3-stub"
-description = "Stub appended to the Watch 3 Pro stock app.bin: the boot watch face guard only"
+description = "Stub appended to the Watch 3 Pro stock app.bin: the boot watch face guard, an Apps entry in the app list and the stub view"
 edition.workspace = true
 license.workspace = true
 version.workspace = true

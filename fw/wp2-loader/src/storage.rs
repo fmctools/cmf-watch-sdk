@@ -1,10 +1,10 @@
 //! JX402 1.0.0.73 read-only metadata service. UI thread only; see docs/storage-inspection.md.
 use core::mem::transmute;
-use wp2_core::{fs, layout, pkg, stock, storage};
+use crate::plat::{fs, stock}; use wp2_core::{layout, pkg, storage};
 
-// Verified from partition_init at 0x100f6f40; stock validates this ACPT pointer at boot.
-const TABLE_PTR: usize = 0x3801_f1e8;
-const FAT_OPS: u32 = 0x101f_6ac0;
+// WP2: verified from partition_init at 0x100f6f40; stock validates this ACPT pointer at boot (per model).
+use crate::plat::obj::TABLE_PTR;
+use crate::plat::obj::FAT_OPS;
 
 fn table() -> Result<&'static [u8], i32> {
     let p = unsafe { (TABLE_PTR as *const u32).read_volatile() } as usize;
@@ -56,7 +56,7 @@ fn refresh() -> Result<[u32; 8], i32> {
     }
     let (total, free) = storage::capacity(&raw)?;
     let (mut packages, mut data, mut widgets, mut slots) = (0u32, 0u32, 0u32, 0u32);
-    for slot in 0..layout::stub_ram().slots() {
+    for slot in 0..crate::plat::stub_ram().slots() {
         let n = size(mp, &layout::slot_path(slot, false))?;
         slots += (n > 0) as u32;
         packages = packages.checked_add(n).ok_or(-75)?;
@@ -99,7 +99,7 @@ fn allocate_scan() -> Result<(), i32> {
     unsafe {
         if SCAN_BUFFER.is_null() {
             let n = core::mem::size_of::<ScanBuffer>();
-            let p = wp2_core::heap::alloc(wp2_core::heap::RES, n as u32, 64);
+            let p = crate::plat::heap::alloc(crate::plat::heap::RES, n as u32, 64);
             if p.is_null() {
                 return Err(-12);
             }
@@ -262,20 +262,20 @@ fn scan_step() -> Result<i32, i32> {
     Ok(status())
 }
 /// All handles belong to the running app. The UI thread calls this only after aborting that thread.
-pub fn stop() {
+pub fn stop() { #[cfg(feature = "wp3")] return;
     close_dir();
     unsafe {
         FILE_COUNT = 0;
         DIR_COUNT = 0;
         DIR_AT = 0;
         SCAN_ACTIVE = false;
-        wp2_core::heap::free(wp2_core::heap::RES, SCAN_BUFFER.cast());
+        crate::plat::heap::free(crate::plat::heap::RES, SCAN_BUFFER.cast());
         SCAN_BUFFER = core::ptr::null_mut();
     }
 }
 
 /// The app block was range-checked by lv::submit. UI thread only; no caller pointers are stored.
-pub fn execute(buf: &mut [u8]) -> i32 {
+pub fn execute(buf: &mut [u8]) -> i32 { #[cfg(feature = "wp3")] return -95; // ENOTSUP: dirent 0x10C, partition table not checked: M3
     let Some((op, index)) = storage::request(buf) else {
         return -22;
     };
@@ -289,7 +289,7 @@ pub fn execute(buf: &mut [u8]) -> i32 {
         match op {
             0 if i == 0 => {
                 out[..2].copy_from_slice(&(storage::VERSION as u16).to_le_bytes());
-                out[2] = layout::stub_ram().slots();
+                out[2] = crate::plat::stub_ram().slots();
                 out[3] = storage::MAX_PARTITIONS as u8;
                 out[4..6].copy_from_slice(&(FILE_MAX as u16).to_le_bytes());
                 out[6..8].copy_from_slice(&(DIR_MAX as u16).to_le_bytes());
@@ -316,7 +316,7 @@ pub fn execute(buf: &mut [u8]) -> i32 {
                 put(out, 12, storage::partition(t, i, 1)?);
                 put(out, 16, storage::partition(t, i, 2)?);
             }
-            4 if i < (layout::stub_ram().slots() as usize) => {
+            4 if i < (crate::plat::stub_ram().slots() as usize) => {
                 let a = read_app(i as u8);
                 out[0] = a.valid as u8;
                 out[1] = a.icon as u8;

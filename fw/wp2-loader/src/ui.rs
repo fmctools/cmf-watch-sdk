@@ -2,9 +2,9 @@ use core::ffi::c_void;
 use core::ptr::{addr_of_mut, null, null_mut};
 use core::sync::atomic::{AtomicU32, Ordering};
 use wp2_core::gfx::{self, Canvas, H, W};
-use wp2_core::heap::{self, FB};
+use crate::plat::heap::{self, FB};
 use wp2_core::layout::E_NOMEM;
-use wp2_core::stock::*;
+use crate::plat::stock::*;
 
 // LV_COLOR_DEPTH 16, LV_COLOR_16_SWAP 0 (docs/recon.md)
 pub const FB_BYTES: u32 = (W * H * 2) as u32;
@@ -149,7 +149,7 @@ pub fn flush(b: u32) {
         return;
     }
     let len = ((y1 + 1 - y0) * W * 2) as u32;
-    wp2_core::load::sync_psram(unsafe { u.fb.add(y0 * W * 2) }, len);
+    crate::plat::load::sync_psram(unsafe { u.fb.add(y0 * W * 2) }, len);
     let a = [x0, y0, x1, y1].map(|v| v as i32);
     stock!(LV_OBJ_INVALIDATE_AREA, fn(Obj, *const i32))(u.img, a.as_ptr());
     count(1, 1);

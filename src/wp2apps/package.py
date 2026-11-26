@@ -17,6 +17,11 @@ KIND_LOADER = 1
 APP_SIZE = 0x20000
 LOADER_SIZE = 0x10000
 NAME_BYTES = 23
+# header byte 0x38 (the first reserved byte): the model a loader is built for, 0 for a Watch Pro 2 loader and for
+# every app (apps are model-free). A WP2 stub rejects any non-zero reserved byte, so it refuses a Watch 3 Pro
+# loader; the Watch 3 Pro stub requires its model there (wp2-core port.rs).
+MODEL_OFFSET = 0x38
+LOADER_MODELS = {"wp2": 0, "wp3": 2}
 
 
 WIDGET, PAGE = 1, 2  # app_features! flags (sdk cmf-wp2-app, wp2-core pkg.rs)
@@ -95,6 +100,7 @@ class Package:
     image: bytes
     relocs: tuple[int, ...]
     widget_icons: tuple[bytes, ...] = ()
+    model: str = "wp2"  # a loader's model (LOADER_MODELS); "wp2" for every app
 
 
 SHN_ABS = 0xFFF1
@@ -122,7 +128,8 @@ def _check(image: bytes, name: bytes, kind: int, entry: int, relocs: Sequence[in
 
 
 def pack(image: bytes, *, name: str, version: int, entry: int = 0, kind: int = KIND_APP,
-         relocs: Sequence[int] = (), abi_minor: int = ABI_MINOR, widget_icons: Sequence[bytes] = ()) -> bytes:
+         relocs: Sequence[int] = (), abi_minor: int = ABI_MINOR, widget_icons: Sequence[bytes] = (),
+         model: str = "wp2") -> bytes:
     encoded = name.encode("utf-8")
     _check(image, encoded, kind, entry, relocs)
     if not 0 <= abi_minor <= 0xFF:
@@ -133,6 +140,11 @@ def pack(image: bytes, *, name: str, version: int, entry: int = 0, kind: int = K
     fields[10] = zlib.crc32(HEADER.pack(*fields)[:HEADER_CRC_SPAN])
     if widget_icons and kind != KIND_APP:
         raise ValueError("only an app carries widget icons")
+    if model not in LOADER_MODELS:
+        raise ValueError(f"unknown model {model!r}")
+    if LOADER_MODELS[model] and kind != KIND_LOADER:
+        raise ValueError("only a loader carries a model; apps run on every model")
+    fields[11] = bytes([LOADER_MODELS[model]]) + bytes(7)
     return HEADER.pack(*fields) + image + table + (widget_trailer(widget_icons) if widget_icons else b"")
 
 
@@ -145,7 +157,7 @@ def parse(data: bytes) -> Package:
         raise ValueError("not a WP2 app package")
     if zlib.crc32(data[:HEADER_CRC_SPAN]) != header_crc:
         raise ValueError("header CRC mismatch")
-    if any(reserved):
+    if any(reserved[1:]) or reserved[0] not in LOADER_MODELS.values() or reserved[0] and kind != KIND_LOADER:
         raise ValueError("reserved header bytes are not zero")
     if abi != ABI:
         raise ValueError(f"unsupported ABI {abi}")
@@ -165,7 +177,8 @@ def parse(data: bytes) -> Package:
     except UnicodeDecodeError as error:
         raise ValueError("name is not valid UTF-8") from error
     _check(image, encoded, kind, entry, relocs)
-    return Package(kind, abi, abi_minor, name, version, entry, image, relocs, widget_icons)
+    model = next(m for m, b in LOADER_MODELS.items() if b == reserved[0])
+    return Package(kind, abi, abi_minor, name, version, entry, image, relocs, widget_icons, model)
 
 
 def _sections(elf: bytes):

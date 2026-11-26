@@ -2,14 +2,14 @@ use crate::{gps, hr, lv, media, motor, svc, ui};
 use core::ptr::addr_of_mut;
 use core::sync::atomic::{AtomicBool, AtomicI32, AtomicU32, Ordering};
 use wp2_core::gfx;
-use wp2_core::events::{popup_covers, Api, Event, Queue, BUTTON, PAUSE, RESUME};
-use wp2_core::heap::{self, RES};
-use wp2_core::layout::stub_ram;
-use wp2_core::load;
-use wp2_core::stock::{K_THREAD_ABORT, OS_SLEEP, OS_THREAD_CREATE, SYS_CLOCK_TICK_GET};
+use crate::plat::popup_covers; use wp2_core::events::{Api, Event, Queue, BUTTON, PAUSE, RESUME};
+use crate::plat::heap::{self, RES};
+use crate::plat::stub_ram;
+use crate::plat::load;
+use crate::plat::stock::{K_THREAD_ABORT, OS_SLEEP, OS_THREAD_CREATE, SYS_CLOCK_TICK_GET};
 
 // bits 0/1: a stock popup is open, ids at +2 / +4 (set_popup_msgbox / set_close_msgbox, docs/recon.md)
-const POPUP_FLAGS: usize = 0x3800_FAF4;
+use crate::plat::obj::POPUP_FLAGS;
 
 pub const NONE: u8 = 0xFF;
 // lowest preemptible priority (idle is 15): every stock thread but standby, actlog and shell_uart (also 14)

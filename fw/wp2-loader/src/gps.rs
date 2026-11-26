@@ -8,7 +8,7 @@ use core::ptr::addr_of_mut;
 use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use wp2_core::events::Event;
 use wp2_core::gps::{self, Hold, FIX_LEN, MODE_ON, RAW_LEN};
-use wp2_core::stock::{GPS_INFO, GPS_STATE, PROP_GPS_MODE, UX2SYS_SET};
+use crate::plat::stock::{GPS_INFO, GPS_STATE, PROP_GPS_MODE, UX2SYS_SET};
 
 const E_PERM: i32 = -1;
 
@@ -18,7 +18,7 @@ static EMIT_AT: AtomicU32 = AtomicU32::new(0);
 static mut HOLD: Hold = Hold::new();
 
 // app thread (lv_submit)
-pub fn request(on: bool) -> i32 {
+pub fn request(on: bool) -> i32 { #[cfg(feature = "wp3")] return crate::plat::E_NODEV; // GPS: M3
     WANT.store(on, Ordering::Release);
     0
 }
@@ -32,7 +32,7 @@ fn stock_on() -> bool {
 }
 
 // UI thread
-pub fn tick(running: bool, paused: bool) {
+pub fn tick(running: bool, paused: bool) { #[cfg(feature = "wp3")] return;
     let want = WANT.load(Ordering::Acquire) && running && !paused;
     let s = unsafe { (*addr_of_mut!(HOLD)).tick(millis(), want, stock_on()) };
     if s.start {
@@ -69,7 +69,7 @@ fn read() -> [u8; FIX_LEN] {
 }
 
 // app thread (lv_submit, GPS_FIX record in the app block): overwrites the payload with the latest fix
-pub fn fix(out: *mut u8) -> i32 {
+pub fn fix(out: *mut u8) -> i32 { #[cfg(feature = "wp3")] return crate::plat::E_NODEV;
     if !ON.load(Ordering::Acquire) {
         return E_PERM;
     }
@@ -79,7 +79,7 @@ pub fn fix(out: *mut u8) -> i32 {
 }
 
 // app thread (next_event): a GPS event every EMIT_MS while the app holds it, lit or dark
-pub fn due() -> Option<Event> {
+pub fn due() -> Option<Event> { #[cfg(feature = "wp3")] return None;
     let now = millis();
     if !ON.load(Ordering::Acquire) || now.wrapping_sub(EMIT_AT.load(Ordering::Relaxed)) < gps::EMIT_MS {
         return None;
@@ -89,7 +89,7 @@ pub fn due() -> Option<Event> {
 }
 
 // UI thread, app thread aborted
-pub fn stop() {
+pub fn stop() { #[cfg(feature = "wp3")] return;
     WANT.store(false, Ordering::Release);
     tick(false, false);
 }
