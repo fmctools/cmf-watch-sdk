@@ -4,6 +4,8 @@ import re
 import struct
 import zlib
 
+from . import fmclabel
+
 STOCK_SHA256_PREFIX = "30e7978c39d8fb79"
 STUB_OFFSET = 0x25A080
 HEAP_LITERALS = (0x188508, 0x188588, 0x1885F4)
@@ -48,8 +50,32 @@ STOCK_BLE_READ = 0x100CC284
 # Watch 3 Pro jx402_08 1.0.1.77 (wp2-core wfguard.rs WP3): the stub goes at the end of app.bin
 WP3_STOCK_SHA256_PREFIX = "815a21fc80aa3941"
 WP3_STUB_OFFSET = 0x2BD280
-WP3_STUB_MAX = 0x1000
+# stub and the copied view table (fw/wp3-stub/link.ld); the app partition's real size on WP3 is unmeasured
+WP3_STUB_MAX = 0x5000
 WP3_STUB_HEADER = struct.Struct("<4sI5I")
+# header version 2 (fw/wp3-stub): the guard's hooks, the app list's List and Grid update handlers, the view proc
+# and the view name of the stub's view WP3_VIEW_ID
+WP3_STUB_HEADER_V2 = struct.Struct("<4sI9I")
+# version 3 adds the boot hook (StubRam) and the install channel's hook (fw/wp3-stub ble.rs)
+WP3_STUB_HEADER_V3 = struct.Struct("<4sI11I")
+WP3_HEADERS = {1: WP3_STUB_HEADER, 2: WP3_STUB_HEADER_V2, 3: WP3_STUB_HEADER_V3}
+# ResFbHeap size in three literal slots (model.rs heap_literals); the stub's StubRam takes its top 4 KiB
+WP3_HEAP_LITERALS = (0x1019C654, 0x1019C700, 0x1019C76C)
+WP3_HEAP_OLD = 0x636B00
+WP3_HEAP_NEW = WP3_HEAP_OLD - STUB_RAM_SIZE
+WP3_BOOT_CALL, WP3_STOCK_HEAP_INIT = 0x1019C646, 0x10152F18
+# `bl read_payload` in the BLE dispatcher's default branch; the frame is in r4 there
+WP3_BLE_CALL, WP3_STOCK_BLE_READ = 0x100C253A, 0x100C0EEC
+# (rodata slot, its stock handler): the update handler (+8 after the 0xC18487B4 marker) of the List and of the Grid
+# style's view ops, in the header's order (wp2-core model.rs applist_hook_slot / applist_grid_hook_slot)
+WP3_APPLIST = ((0x10215A68, 0x10047351), (0x10215948, 0x10046D99))
+# 20-byte records {name, proc (word 1), 0, u16 id, u16 0x102, u16 466, u16 466} (model.rs view_*)
+WP3_VIEW_TABLE, WP3_VIEW_TABLE_END = 0x1000050C, 0x1000136C
+WP3_VIEW_START_LITERALS = (0x101A1304, 0x101A3194)
+WP3_VIEW_END_LITERALS = (0x101A1308, 0x101A3198)
+WP3_VIEW_RECORD = struct.Struct("<IIIHHHH")
+# model.rs menu_view: a free wake-lock id (0x118..0x146 are msgbox and wake ids), the loader's lock later
+WP3_VIEW_ID = 0x147
 GUARD_WP3 = (
     (0x100D6E20, 0x101D5A02, WF_BOOT),
     (0x100A5D84, 0x100D577C, WF_SAVED),
@@ -227,9 +253,9 @@ def _swap_hook(out: bytearray, at: int, target: int) -> int:
 
 
 def patch(app: bytes, stub: bytes | None = None, *, motor: int | None = None, reserve: bool = True,
-          weak: int | None = None, _verify: bool = True) -> bytes:
+          weak: int | None = None, label: bool = False, _verify: bool = True) -> bytes:
     """motor: stock vibrations at this many permille of their strength; reserve: the loader's heap reservation;
-    weak: a fourth vibration level at this many permille."""
+    weak: a fourth vibration level at this many permille; label: "<version>-fmc" on the About page (add_fmc_label)."""
     if _verify and not hashlib.sha256(app).hexdigest().startswith(STOCK_SHA256_PREFIX):
         raise ValueError("not the stock JX402 1.0.0.73 app.bin (sha256 mismatch)")
     if stub is not None and not reserve:
@@ -249,8 +275,10 @@ def patch(app: bytes, stub: bytes | None = None, *, motor: int | None = None, re
     if stub is not None:
         add_stub(out, stub)
     out += bytes(-len(out) % 4)
+    if label:
+        add_fmc_label(out, app)
     # stock size stops before the appended ksdfs tail; appended code must be covered
-    fix_acth(out, None if stub is not None else size)
+    fix_acth(out, None if stub is not None or label else size)
     check_acth(out)
     return bytes(out)
 
@@ -301,29 +329,98 @@ def put_guard(out: bytearray, sites: tuple, hooks: list[int]) -> None:
         put(out, at, thumb_bl(at, stock), thumb_bl(at, hooks[hook] & ~1))
 
 
-def patch_wp3(app: bytes, stub: bytes) -> bytes:
-    """Watch 3 Pro: appends fw/wp3-stub (the watch face guard only) and points the GUARD_WP3 calls at it."""
+def patch_wp3(app: bytes, stub: bytes, *, label: bool = False) -> bytes:
+    """Watch 3 Pro: appends fw/wp3-stub and points the GUARD_WP3 calls at it; a version 2 stub also gets the
+    WP3_APPLIST slots and a view-table record for WP3_VIEW_ID (add_stub_wp3). label: add_fmc_label after the stub."""
     if not hashlib.sha256(app).hexdigest().startswith(WP3_STOCK_SHA256_PREFIX):
         raise ValueError("not the stock jx402_08 1.0.1.77 app.bin (sha256 mismatch)")
     out = bytearray(app)
     add_stub_wp3(out, stub)
+    if label:
+        add_fmc_label(out, app)
     fix_acth(out)
     check_acth(out)
     return bytes(out)
 
 
 def add_stub_wp3(out: bytearray, stub: bytes) -> None:
-    magic, version, *guard = WP3_STUB_HEADER.unpack_from(stub)
+    """Version 1: the guard only. Version 2: also the app-list update slots and the stub's view, whose record goes
+    into a copy of the view table after the stub (the stock literals are repointed at the copy, as on WP2).
+    Version 3: also the boot hook with the ResFbHeap shrunk by StubRam, and the BLE default-branch hook."""
+    if len(stub) < WP3_STUB_HEADER.size:
+        raise ValueError("bad stub header")
+    magic, version = struct.unpack_from("<4sI", stub)
+    if magic != b"WP3S" or version not in WP3_HEADERS or len(stub) < WP3_HEADERS[version].size:
+        raise ValueError("bad stub header")
+    fields = WP3_HEADERS[version].unpack_from(stub)[2:]
+    if version == 1:
+        code, view_name, hooks = fields, None, ()
+    else:
+        code, view_name, hooks = fields[:8], fields[8], fields[9:]
+        code += hooks
     base = APP_VBASE + WP3_STUB_OFFSET
-    if magic != b"WP3S" or version != 1 or not all(p & 1 and base <= p & ~1 < base + len(stub) for p in guard):
+    if not all(p & 1 and base <= p & ~1 < base + len(stub) for p in code):
+        raise ValueError("bad stub header")
+    if view_name is not None and not base <= view_name < base + len(stub):
         raise ValueError("bad stub header")
     if len(stub) > WP3_STUB_MAX:
         raise ValueError(f"stub takes {len(stub):#x} bytes; the limit is {WP3_STUB_MAX:#x}")
     if len(out) != WP3_STUB_OFFSET:
         raise ValueError(f"app.bin is {len(out):#x} bytes; the stub goes at {WP3_STUB_OFFSET:#x}")
+    guard = code[:5]
     out += stub
-    out += bytes(-len(out) % 4)
+    if version == 1:
+        out += bytes(-len(out) % 4)
+        put_guard(out, GUARD_WP3, guard)
+        return
+    applist, view_proc = code[5:7], code[7]
+    out += bytes(-len(out) % 8)
+    table = APP_VBASE + len(out)
+    out += out[WP3_VIEW_TABLE - APP_VBASE:WP3_VIEW_TABLE_END - APP_VBASE]
+    out += WP3_VIEW_RECORD.pack(view_name, view_proc, 0, WP3_VIEW_ID, 0x102, 466, 466)
+    if len(out) - WP3_STUB_OFFSET > WP3_STUB_MAX:
+        raise ValueError(f"stub and view table take {len(out) - WP3_STUB_OFFSET:#x} bytes; "
+                         f"the limit is {WP3_STUB_MAX:#x}")
+    for lit in WP3_VIEW_START_LITERALS:
+        put(out, lit, struct.pack("<I", WP3_VIEW_TABLE), struct.pack("<I", table))
+    for lit in WP3_VIEW_END_LITERALS:
+        put(out, lit, struct.pack("<I", WP3_VIEW_TABLE_END), struct.pack("<I", APP_VBASE + len(out)))
+    for (slot, stock), hook in zip(WP3_APPLIST, applist):
+        put(out, slot, struct.pack("<I", stock), struct.pack("<I", hook))
     put_guard(out, GUARD_WP3, guard)
+    if hooks:
+        boot, ble = hooks
+        for lit in WP3_HEAP_LITERALS:
+            put(out, lit, struct.pack("<I", WP3_HEAP_OLD), struct.pack("<I", WP3_HEAP_NEW))
+        put(out, WP3_BOOT_CALL, thumb_bl(WP3_BOOT_CALL, WP3_STOCK_HEAP_INIT), thumb_bl(WP3_BOOT_CALL, boot & ~1))
+        put(out, WP3_BLE_CALL, thumb_bl(WP3_BLE_CALL, WP3_STOCK_BLE_READ), thumb_bl(WP3_BLE_CALL, ble & ~1))
+
+
+def add_fmc_label(out: bytearray, stock: bytes) -> str:
+    """Settings > About shows "<version>-fmc" (fmclabel, docs/recon.md "About page label"); every machine-readable
+    version (AT GETVERSION, the BLE replies, the OTA version code) stays stock. Sites are located in the `stock`
+    image; the new bytes are appended to `out` (4-aligned), so call it after the stub and fix the ACTH after it.
+    WP3 shape: the page's format pool word points at "%s-fmc" + the rest of the stock format (data only). Otherwise
+    the page's `add.w rD, sp, #..` becomes `bl thunk`, thunk = `ldr rD, [pc, #0]; bx lr; .word label`: the page
+    already called the info getter, so its lr is saved. Returns the label."""
+    sites = fmclabel.locate(stock)
+    label = sites.label
+    out += bytes(-len(out) % 4)
+    at = APP_VBASE + len(out)
+    if sites.fmt_pool_off is not None:
+        word = sites.fmt_pool_off
+        old = struct.unpack_from("<I", stock, word)[0]
+        put(out, APP_VBASE + word, struct.pack("<I", old), struct.pack("<I", at))
+        out += sites.fmt.replace(b"%s", b"%s" + fmclabel.SUFFIX.encode(), 1) + b"\0"
+    else:
+        if sites.page_rd > 7:
+            raise ValueError(f"About page site uses r{sites.page_rd}; the thunk needs r0..r7")
+        add = sites.page_add
+        old = stock[add - APP_VBASE:add - APP_VBASE + 4]
+        out += struct.pack("<HHI", 0x4800 | sites.page_rd << 8, 0x4770, at + 8) + label.encode() + b"\0"
+        put(out, add, old, thumb_bl(add, at))
+    out += bytes(-len(out) % 4)
+    return label
 
 
 def changed_ranges(old: bytes, new: bytes, gap: int = 16) -> list[tuple[int, int]]:

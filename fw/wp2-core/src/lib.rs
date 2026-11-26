@@ -13,9 +13,11 @@ pub mod heart;
 pub mod heap;
 pub mod layout;
 pub mod lvcmd;
+pub mod model;
 #[cfg(target_os = "none")]
 pub mod load;
 pub mod pkg;
+pub mod port;
 pub mod proto;
 pub mod pwm;
 pub mod stock;

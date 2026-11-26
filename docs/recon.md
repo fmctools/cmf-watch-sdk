@@ -836,6 +836,39 @@ five hooks) holds only the guard, appended at the end of app.bin (`0x102BD280`);
 patches the sites above and fixes ACTH, `wp2apps ota-image --model wp3` (`make fw-ota-wp3`) puts it into the stock
 image. The stock data and the calls are in wp2-core `wfguard.rs` (`WP3`).
 
+Header version 2 (loader port milestone M1) adds an "Apps" entry to the stock app
+list and the stub's own view: two more hooks for the List and Grid styles' update handlers (rodata `0x10215A68`,
+`0x10215948`, stock `0x10047351` / `0x10046D99`; adapted from jimhooker's MIT `wp3-applist.patch`), then the view proc
+and the view's name. `add_stub_wp3` copies the view table (20-byte records, `0x1000050C..0x1000136C`) after the stub,
+appends `{name, proc, 0, u16 0x147, 0x102, 466, 466}` and repoints `0x101A1304`/`0x101A3194` (start) and
+`0x101A1308`/`0x101A3198` (end). View 0x147 is a free wake-lock id (msgbox ids 0x118..0x146 double as wake ids); app
+pages will be 0x151 and up, above the wake bound 0x150 (wp2-core `model.rs`, `menu_view`). Every address the stub
+uses comes from `model::WP3`.
+
+Apps in the Grid: the grid layout fills a 30-pointer object array (`applist_grid_objs`, data `+0x16C`) directly
+followed by the container (`+0x1E4`) and the count, and the place function `0x101C70EB` reads one pointer per child
+of the container. The Apps icon takes the slot of a hidden optional entry, so with all three optional entries shown
+(27 + 3 = 30) the Grid has no Apps icon; the List keeps its row. The icon blocks (List 96 px ≈ 28 KB, Grid 160 px
+≈ 77 KB) and the menu's state come from the ResFbHeap through wp2-core `port::alloc`, which checks the free list
+first: the stock allocator never returns NULL (see "JHeap never returns NULL" above), so a direct call on a low heap
+resets the watch, while a failed check only leaves the entry out.
+
+Header version 3 adds the install channel: a boot hook at `bl stock_heap_init` (`0x1019C646`; StubRam = the top
+4 KiB of the ResFbHeap, whose size literals `0x1019C654`/`0x1019C700`/`0x1019C76C` go from `0x636B00` to `0x635B00`,
+StubRam at `0x3871ECC0`) and a hook at `bl read_payload` in the BLE dispatcher's default branch (`0x100C253A`,
+frame in r4). The protocol is the WP2 one with two differences: DATA is `0x90A9` (the stock dispatcher sends
+`0x90A2` to its Do Not Disturb handler `0x100CD7EC`, never to the default branch), and the StubVersion reply has a
+seventh byte, the model (2; a WP2 stub sends 6 bytes, which hosts read as model 1). `wp2apps` picks DATA from that
+byte. Until a loader is installed, MSG and PUSH answer NO_APP.
+
+Loader (milestone M2): `wp2-loader --features wp3` builds the same source for the Watch 3 Pro; `src/plat.rs` maps
+every stock name to `model::WP3` (fs/heap/load through wp2-core `port.rs`; lv_obj_t 0x30 offsets; suspend 0xCA / wake
+0xCB; keys 0x1E / 0x1F / 0x04000001 / 0x71; wake id 0x147; AOD msgbox 0x136; time from the UTC API). The package
+records the model in header byte 0x38 (2; reserved and zero for WP2, so a WP2 stub refuses it, and the WP3 stub
+refuses a loader without it). The stub's view 0x147 loads slot L as the WP2 stub's view.rs does and shows a
+placeholder ("No loader installed") when it cannot. Motor, GPS, heart rate, phone media, the music tile, storage
+inspection, widget cards and pages answer an error on this model (M3).
+
 | Item | WP2 1.0.0.73 | Watch 3 Pro 1.0.1.77 |
 |---|---|---|
 | `WFManager_Init` | `0x100DE020` | `0x100D6DAC` |
@@ -861,3 +894,28 @@ the setup screens; boot 1 always reboots out of setup).
 Not covered beyond the list above: a face that really faults 1.0.1.77; OTA of the image (the emulator installs only
 WP2's; this one is checked by unpacking it and by `fwkit verify`); the 3 Pro emulator profile is experimental
 (synthetic storage layout).
+
+## About page label (`<version>-fmc`)
+
+Purpose: custom firmware is easy to tell apart on the watch itself. Settings > About shows `1.0.0.73-fmc` /
+`1.0.1.77-fmc`, while every machine-readable version stays stock: `AT GETVERSION`, the BLE version replies and the
+OTA version code (`ota.xml`, not in app.bin), so the phone apps and the update path see a stock version.
+`wp2apps firmware` adds it by default (`--no-fmc-label` keeps the stock page; `--motor-only` never has it).
+
+`wp2apps/fmclabel.py` finds the sites by signature, each step refusing unless it finds exactly one match, so it
+carries to later stock releases (the addresses below are for these two builds only):
+
+| Step | WP2 1.0.0.73 | Watch 3 Pro 1.0.1.77 |
+|---|---|---|
+| version string: the only `N.N.N.N\0` with pool references | file `0x203A35` | file `0x23AA9A` |
+| info fill `movs r2,#0x14; ldr r1,=version; add.w r0,r4,#F; bl`: field F of info record `0x11` | F = `0x3F`, pool word `0xE1B2C` | F = `0x49`, pool word `0xDB7DC` |
+| `about_view` record in the view table (view `0x4E`), its proc | `0x10001340`, `0x100BF9F9` | `0x100012E0`, `0x100B3185` |
+| near the proc: `add r1,sp,#B; movs r0,#0x11; bl get_info`, then `add.w rD,sp,#(B+F)` | `0x100BFCB8`, `add.w r1,sp,#0x4B` at `0x100BFF60` | `0x100B2BFC`, `add.w r3,sp,#0xD1` at `0x100B2E00` |
+| format pool word (only when rD = r3, after `ldr r2,=fmt`) | none (r1 goes straight to the label) | `0xB2F38`, `"%s\n(%s %s)"` |
+
+Patch (`firmware.add_fmc_label`, appended after the stub, then the ACTH is fixed): with a format word, the word points
+at an appended `"%s-fmc\n(%s %s)"` (data only; `snprintf(.., 0x80, ..)` has room). Otherwise the page's `add.w`
+becomes `bl thunk`, thunk `ldr rD,[pc,#0]; bx lr; .word "<version>-fmc"` (the page called the info getter just
+before, so its lr is saved). The info pool word is never patched: it feeds `AT GETVERSION` too (tried in the
+emulator: `GETVERSION:1.0.1.77-fmc`). Emulator (virtual BLE only): both models show the label on the About page,
+`AT GETVERSION` answers the stock version, and three boots each are clean.

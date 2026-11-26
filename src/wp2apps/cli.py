@@ -23,7 +23,8 @@ def cmd_pack(args):
     if args.widget_icons and not icons:
         raise ValueError(f"no PNG in {args.widget_icons}")
     data = package.pack(image, name=args.name, version=args.version, kind=kind, entry=entry,
-                        relocs=package.relocations(elf), abi_minor=package.abi_minor(image, elf), widget_icons=icons)
+                        relocs=package.relocations(elf), abi_minor=package.abi_minor(image, elf), widget_icons=icons,
+                        model=args.model)
     with args.output.open("xb") as out:
         out.write(data)
 
@@ -35,7 +36,7 @@ def cmd_info(args):
         "relocs": len(pkg.relocs), "entry": pkg.entry,
         "image_size": len(pkg.image), "crc32": f"{zlib.crc32(pkg.image):#010x}",
         "icon": icon.parse(pkg.image) is not None, "features": package.features(pkg.image),
-        "widget_icons": len(pkg.widget_icons),
+        "widget_icons": len(pkg.widget_icons), "model": pkg.model,
     }, indent=2))
 
 
@@ -53,10 +54,11 @@ def cmd_firmware(args):
         if not stub or args.motor_only or args.motor != 1000:
             raise ValueError("--model wp3 takes only --stub (target/wp3-stub.bin)")
         with args.output.open("xb") as out:
-            out.write(firmware.patch_wp3(paths.stock_app_wp3(), stub))
+            out.write(firmware.patch_wp3(paths.stock_app_wp3(), stub, label=not args.no_fmc_label))
         return
     motor = None if args.motor == 1000 else args.motor
-    data = firmware.patch(paths.stock_app(), stub, motor=motor, reserve=not args.motor_only, weak=None if args.motor_only else args.weak or None)
+    data = firmware.patch(paths.stock_app(), stub, motor=motor, reserve=not args.motor_only, weak=None if args.motor_only else args.weak or None,
+                          label=not (args.no_fmc_label or args.motor_only))
     with args.output.open("xb") as out:
         out.write(data)
 
@@ -225,7 +227,8 @@ def cmd_list(args):
         return stub, await install.listing(s, install.slots(stub))
 
     stub, found = asyncio.run(with_watch(args, both))
-    print(json.dumps({"stub": {"version": stub.version, "abi_minor": stub.abi_minor}, "slots": {slot_name(n): {"name": h.name, "version": h.version, "kind": h.kind,
+    print(json.dumps({"stub": {"version": stub.version, "abi_minor": stub.abi_minor,
+                               "model": install.MODEL_NAMES[stub.model]}, "slots": {slot_name(n): {"name": h.name, "version": h.version, "kind": h.kind,
                                                "abi_minor": h.abi_minor, "icon": h.icon}
                                 for n, h in found.items()}}))
 
@@ -336,6 +339,8 @@ def parser():
     pack.add_argument("--output", type=Path, required=True)
     pack.add_argument("--elf", type=Path, required=True, help="Linked ELF: entry/length check and relocation table")
     pack.add_argument("--kind", choices=("app", "loader"), default="app")
+    pack.add_argument("--model", choices=tuple(package.LOADER_MODELS), default="wp2",
+                      help="the watch a loader is built for (header byte 0x38); apps run on every model")
     pack.add_argument("--widget-icons", type=Path, metavar="DIR",
                       help="40x40 RGBA PNGs, file name order = icon index (docs/app-icons.md)")
     pack.set_defaults(handler=cmd_pack)
@@ -357,7 +362,10 @@ def parser():
     fw.add_argument("--weak", type=int, default=350, metavar="PERMILLE",
                     help="a fourth vibration level in Settings at this share (default 350; 0: none)")
     fw.add_argument("--motor-only", action="store_true",
-                    help="only the motor patch: no heap reservation, no stub, stock app.bin size")
+                    help="only the motor patch: no heap reservation, no stub, no label, stock app.bin size")
+    fw.add_argument("--no-fmc-label", action="store_true",
+                    help="keep the stock About page; by default Settings > About shows '<version>-fmc' "
+                         "(AT GETVERSION and every other version stay stock)")
     fw.add_argument("--output", type=Path, required=True)
     fw.set_defaults(handler=cmd_firmware)
     ota = commands.add_parser("ota-image", help="Full stock firmware image carrying a patched app.bin")

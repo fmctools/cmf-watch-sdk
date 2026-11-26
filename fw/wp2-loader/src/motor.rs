@@ -1,7 +1,7 @@
 use crate::app::millis;
 use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use wp2_core::pwm::{decide, mark_on, over_cap, pulse, E_LOCKED, E_PAUSED, STOCK_CLOCK};
-use wp2_core::stock::{CMU_PWMCLK, PWM_DEVICE};
+use crate::plat::stock::{CMU_PWMCLK, PWM_DEVICE};
 
 const CH: u32 = 0;
 const PIN_SET_CYCLES: usize = 0;
@@ -29,7 +29,7 @@ pub fn reset() {
 
 // App thread. No BASEPRI around the driver: pin_set_cycles logs through the Zephyr log subsystem before its own
 // BASEPRI section, not proven non-blocking. A UI-thread cut that preempts the write is caught by the re-check.
-pub extern "C" fn motor(duty_permille: u16, freq_hz: u16) -> i32 {
+pub extern "C" fn motor(duty_permille: u16, freq_hz: u16) -> i32 { #[cfg(feature = "wp3")] return crate::plat::E_NODEV; // haptic chip: M3
     let (clk, period) = match decide(duty_permille, freq_hz, PAUSED.load(Ordering::Acquire), LOCKED.load(Ordering::Acquire)) {
         Err(e) => return e,
         Ok(None) => {
@@ -52,7 +52,7 @@ pub extern "C" fn motor(duty_permille: u16, freq_hz: u16) -> i32 {
     rc.min(0)
 }
 
-pub fn off() {
+pub fn off() { #[cfg(feature = "wp3")] return;
     stock!(driver(PIN_OFF), fn(u32, u32) -> i32)(PWM_DEVICE, CH);
     set_clock(STOCK_CLOCK);
     ON_SINCE.store(0, Ordering::Release);
@@ -60,7 +60,7 @@ pub fn off() {
 
 // UI tick (20 ms): continuous run is capped at CAP_MS, then the motor stays locked; also catches a motor()
 // that raced the pause
-pub fn watchdog() {
+pub fn watchdog() { #[cfg(feature = "wp3")] return;
     let since = ON_SINCE.load(Ordering::Acquire);
     if since == 0 {
         return;

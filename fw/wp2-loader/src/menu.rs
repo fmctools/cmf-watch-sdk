@@ -54,12 +54,12 @@ pub fn rank(e: &Entry, order: &Order) -> (usize, u8) {
 // Entries are packed from index 0 in the phone's order; row i shows entries[i].
 #[cfg(target_os = "none")]
 pub fn scan() -> [Option<Entry>; ROWS] {
-    use wp2_core::{fs, layout::slot_path};
+    use crate::plat::fs; use wp2_core::layout::slot_path;
     let mut found: [(Option<Entry>, *mut u8); ROWS] = [(None, core::ptr::null_mut()); ROWS];
     let mut n = 0;
     let mut file: fs::File = [0; 0x2C];
     // a stub before 8 takes slots 0..7 only: 8.pkg..F.pkg left by a newer stub are not its apps
-    for slot in 0..wp2_core::layout::stub_ram().slots() {
+    for slot in 0..crate::plat::stub_ram().slots() {
         if fs::open(&mut file, &slot_path(slot, false), fs::READ) < 0 {
             continue;
         }
@@ -185,11 +185,11 @@ pub mod lv {
     use super::*;
     use core::ffi::c_void;
     use core::ptr::{addr_of_mut, null, null_mut};
-    use wp2_core::fs;
-    use wp2_core::heap::{self, RES};
-    use wp2_core::load::sync_psram;
+    use crate::plat::fs;
+    use crate::plat::heap::{self, RES};
+    use crate::plat::load::sync_psram;
     use wp2_core::pkg::{icon_ok, ICON_BYTES, ICON_DESC, ICON_SIDE};
-    use wp2_core::stock::*;
+    use crate::plat::stock::*;
 
     pub type Obj = *mut c_void;
     pub type Cb = extern "C" fn(*mut c_void);
@@ -221,7 +221,7 @@ pub mod lv {
     // RGB565+A8 only behind that header, the hardware ignores it (applist-style, docs/recon.md)
     const HEAD: usize = 64;
     const BLOCK: u32 = HEAD as u32 + ICON_BYTES;
-    const FONT_PATH: &[u8] = b"/NAND:A/font32M.font\0";
+    #[cfg(not(feature = "wp3"))] const FONT_PATH: &[u8] = b"/NAND:A/font32M.font\0"; #[cfg(feature = "wp3")] const FONT_PATH: &[u8] = b"/NAND:B/font32M.font\0";
 
     // repr(C): the e2e probe reads it by offset
     #[repr(C)]

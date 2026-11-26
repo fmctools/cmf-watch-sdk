@@ -5,6 +5,10 @@
 partitions (`res`, `fonts`, `res_e`, `sdfs_k`, AGPS trailer) are stock. `make fw-motor` uses the same builder for
 the motor-only image.
 
+The patched `app.bin` also labels Settings > About as `<version>-fmc` (`wp2apps firmware --no-fmc-label` leaves it
+out), so custom firmware is easy to identify on the watch itself. Every machine-readable version stays stock:
+`AT GETVERSION`, the BLE version replies and the OTA `version_code` (docs/recon.md "About page label").
+
 ## How it is built (`wp2apps ota-image`)
 
 - The stub grows `app.bin` from `0x25A080` to `0x25CDE8` bytes, so `fwkit edit-app` (in-place patches) cannot carry
@@ -70,3 +74,12 @@ Installed `fw-wp2.bin` (`VERSION_CODE=0x10002`) with the stock client of cmf-wat
 approves the `fmc-prod` environment, `promote` reads the image back from the draft, checks its sha256 against the
 draft job's, moves those exact bytes onto the live record and tags the commit (`stub-v<N>`, `loader-<date>-<sha7>`).
 First release this way: `stub-v5` and `loader-2026-11-15-f52cca1`.
+
+The run's `model` input picks the watch: `wp2` (Watch Pro 2, the default), `wp3` (Watch 3 Pro 1.0.1.77) or `both`.
+Each model has its own FMC records, so a Watch 3 Pro build is never offered to a Watch Pro 2 and the other way round.
+The Watch 3 Pro records are created once in the FMC admin UI (patched firmware and loader, device Watch 3 Pro, a
+version such as `1.0.1.77-wp3.0`, stub 0); their ids go in the repository variables `FMC_LIVE_PATCHED_WP3` and
+`FMC_LIVE_LOADER_WP3`, and without them a `wp3` draft is refused. The Watch 3 Pro image comes from the
+cmf-watch-utils commit that added it (the pinned one predates it). Watch 3 Pro tags carry a `wp3-` prefix
+(`wp3-stub-v<N>`, `wp3-loader-<date>-<sha7>`); Watch Pro 2 tags are unchanged. Both models' builds carry the
+`-fmc` About-page label.

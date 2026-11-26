@@ -6,7 +6,7 @@ use core::ptr::addr_of_mut;
 use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use wp2_core::events::Event;
 use wp2_core::heart::{self, Heart, SENSOR_HEART};
-use wp2_core::stock::{HR_BPM, HR_OWNER, HR_WEAR, PROP_HR_MODE, UX2SYS_SET};
+use crate::plat::stock::{HR_BPM, HR_OWNER, HR_WEAR, PROP_HR_MODE, UX2SYS_SET};
 
 const E_INVAL: i32 = -22;
 
@@ -20,7 +20,7 @@ fn byte(addr: u32) -> u8 {
 }
 
 // app thread (lv_submit)
-pub fn request(sensor: u8, on: bool) -> i32 {
+pub fn request(sensor: u8, on: bool) -> i32 { #[cfg(feature = "wp3")] return crate::plat::E_NODEV; // heart rate cells unverified: M3
     if sensor != SENSOR_HEART {
         return E_INVAL;
     }
@@ -33,7 +33,7 @@ fn set_mode(on: u32) {
 }
 
 // UI thread
-pub fn tick(running: bool, paused: bool) {
+pub fn tick(running: bool, paused: bool) { #[cfg(feature = "wp3")] return;
     let want = WANT.load(Ordering::Acquire) && running && !paused;
     let s = unsafe { (*addr_of_mut!(HEART)).tick(millis(), want, byte(HR_OWNER) != 0) };
     if s.start {
@@ -54,7 +54,7 @@ pub fn tick(running: bool, paused: bool) {
 // app thread (next_event): a HEART event every EMIT_MS while it measures, lit or dark (the UI tick stops with the
 // panel). Handed to the app directly: QUEUE has one producer, the UI thread, and a coalesce from here could
 // overwrite an event it just pushed.
-pub fn due() -> Option<Event> {
+pub fn due() -> Option<Event> { #[cfg(feature = "wp3")] return None;
     let now = millis();
     if !ON.load(Ordering::Acquire) || now.wrapping_sub(EMIT_AT.load(Ordering::Relaxed)) < heart::EMIT_MS {
         return None;
@@ -64,7 +64,7 @@ pub fn due() -> Option<Event> {
 }
 
 // UI thread, app thread aborted
-pub fn stop() {
+pub fn stop() { #[cfg(feature = "wp3")] return;
     WANT.store(false, Ordering::Release);
     tick(false, false);
 }

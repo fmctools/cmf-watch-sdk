@@ -3,6 +3,8 @@
 # promote (environment fmc-prod, owner's approval): the draft's bytes onto the live record, draft deleted, git tag.
 # The vendor-based firmware image never leaves FMC: no artifact, no release asset (AGENTS.md rule 2).
 # promote reads the image back from the draft and checks its sha256: exactly the bytes the owner flashed.
+# model: Watch Pro 2 (wp2), Watch 3 Pro (wp3) or both; each model has its own FMC records (wp3: repository variables
+# FMC_LIVE_PATCHED_WP3 / FMC_LIVE_LOADER_WP3, see scripts/publish-fmc) and its own tags (wp3-stub-vN, wp3-loader-...).
 name: FMC release
 
 on:
@@ -12,6 +14,11 @@ on:
         description: What to release
         type: choice
         options: [firmware, loader, both]
+      model:
+        description: Which watch (wp2 = Watch Pro 2, wp3 = Watch 3 Pro)
+        type: choice
+        options: [wp2, wp3, both]
+        default: wp2
       description:
         description: Store description, markdown (\n for a line break; empty keeps the live text; `both` gives it to both records)
         type: string
@@ -25,10 +32,7 @@ jobs:
     permissions:
       contents: read
     outputs:
-      firmware: ${{ steps.publish.outputs.firmware }}
-      firmware_sha256: ${{ steps.publish.outputs.firmware_sha256 }}
-      loader: ${{ steps.publish.outputs.loader }}
-      loader_sha256: ${{ steps.publish.outputs.loader_sha256 }}
+      drafts: ${{ steps.publish.outputs.drafts }}
     steps:
       - uses: actions/checkout@v4
       # AGPL, used as an external tool only; the commit pyproject.toml's fwkit pin points at
@@ -42,6 +46,21 @@ jobs:
         run: |
           git lfs pull --include dumps/binaries/firmware/JX402_V1.0.0.73.bin
           sha256sum dumps/binaries/firmware/JX402_V1.0.0.73.bin | grep -q '^30903fc8'
+      # the pinned commit above predates the Watch 3 Pro image: that one file from the commit that added it
+      - if: inputs.model != 'wp2'
+        uses: actions/checkout@v4
+        with:
+          repository: arnav-kr/cmf-watch-utils
+          ref: b3a987a399d0ab180fec26880b334f5dcd5341a7
+          path: cmf-watch-utils-wp3
+          sparse-checkout: dumps/binaries/firmware
+      - name: Stock firmware, Watch 3 Pro (LFS, this one file only)
+        if: inputs.model != 'wp2'
+        run: |
+          f=dumps/binaries/firmware/JX402_w3pro_V1.0.1.77.bin
+          (cd cmf-watch-utils-wp3 && git lfs pull --include "$f")
+          sha256sum "cmf-watch-utils-wp3/$f" | grep -q '^cf381188'
+          cp "cmf-watch-utils-wp3/$f" "cmf-watch-utils/$f"
       - uses: astral-sh/setup-uv@v6
       - name: Rust
         run: |
@@ -63,27 +82,49 @@ jobs:
           scripts/build-fw
           stub=$(grep -oP 'STUB_VERSION: u32 = \K\d+' fw/wp2-core/src/layout.rs)
           uv run --locked wp2apps ota-image --app target/app-wp2.bin --output target/fw-wp2.bin --version-code $((0x10000 + stub))
+          if [ "${{ inputs.model }}" != wp2 ]; then
+            test -f target/app-wp3.bin  # build-fw skips it without the 3 Pro stock image
+            uv run --locked wp2apps ota-image --model wp3 --app target/app-wp3.bin --output target/fw-wp3.bin \
+              --version-code $((0x10000 + stub))
+          fi
       - name: Draft on FMC
         id: publish
         env:
           FMC_PUBLISHER_EMAIL: ${{ secrets.FMC_PUBLISHER_EMAIL }}
           FMC_PUBLISHER_PASSWORD: ${{ secrets.FMC_PUBLISHER_PASSWORD }}
+          FMC_LIVE_PATCHED_WP3: ${{ vars.FMC_LIVE_PATCHED_WP3 }}
+          FMC_LIVE_LOADER_WP3: ${{ vars.FMC_LIVE_LOADER_WP3 }}
           FMC_DESCRIPTION: ${{ inputs.description }}
           WHAT: ${{ inputs.what }}
+          MODEL: ${{ inputs.model }}
         run: |
           FMC_DESCRIPTION=$(printf '%b' "$FMC_DESCRIPTION")
-          # ponytail: with `both`, a refused loader fails the run after the firmware draft is up; that draft
-          # then stays on FMC unpublished until deleted in the admin UI
-          if [ "$WHAT" != loader ]; then
-            id=$(scripts/publish-fmc draft firmware target/fw-wp2.bin)
-            echo "firmware=$id" >> "$GITHUB_OUTPUT"
-            echo "firmware_sha256=$(sha256sum target/fw-wp2.bin | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+          models=$([ "$MODEL" = both ] && echo "wp2 wp3" || echo "$MODEL")
+          # the Watch 3 Pro records must exist before anything is uploaded (with `both`, a refusal after the wp2
+          # drafts would leave those on FMC)
+          if [ "$MODEL" != wp2 ]; then
+            if [ "$WHAT" != loader ] && [ -z "$FMC_LIVE_PATCHED_WP3" ]; then
+              echo "refused: set the repository variable FMC_LIVE_PATCHED_WP3 (docs/ota.md)" >&2; exit 1
+            fi
+            if [ "$WHAT" != firmware ] && [ -z "$FMC_LIVE_LOADER_WP3" ]; then
+              echo "refused: set the repository variable FMC_LIVE_LOADER_WP3 (docs/ota.md)" >&2; exit 1
+            fi
           fi
-          if [ "$WHAT" != firmware ]; then
-            id=$(scripts/publish-fmc draft loader target/loader.wp2app)
-            echo "loader=$id" >> "$GITHUB_OUTPUT"
-            echo "loader_sha256=$(sha256sum target/loader.wp2app | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
-          fi
+          # ponytail: a draft refused for another reason fails the run after earlier drafts are up; those stay on
+          # FMC unpublished until deleted in the admin UI
+          drafts=""  # "model kind id sha256;" per draft, for promote
+          for m in $models; do
+            loader=target/loader.wp2app; [ "$m" = wp3 ] && loader=target/loader-wp3.wp2app
+            if [ "$WHAT" != loader ]; then
+              id=$(scripts/publish-fmc draft firmware "target/fw-$m.bin" "$m")
+              drafts+="$m firmware $id $(sha256sum "target/fw-$m.bin" | cut -d' ' -f1);"
+            fi
+            if [ "$WHAT" != firmware ]; then
+              id=$(scripts/publish-fmc draft loader "$loader" "$m")
+              drafts+="$m loader $id $(sha256sum "$loader" | cut -d' ' -f1);"
+            fi
+          done
+          echo "drafts=$drafts" >> "$GITHUB_OUTPUT"
 
   promote:
     needs: draft
@@ -97,20 +138,21 @@ jobs:
         env:
           FMC_PUBLISHER_EMAIL: ${{ secrets.FMC_PUBLISHER_EMAIL }}
           FMC_PUBLISHER_PASSWORD: ${{ secrets.FMC_PUBLISHER_PASSWORD }}
+          FMC_LIVE_PATCHED_WP3: ${{ vars.FMC_LIVE_PATCHED_WP3 }}
+          FMC_LIVE_LOADER_WP3: ${{ vars.FMC_LIVE_LOADER_WP3 }}
           GH_TOKEN: ${{ github.token }}
-          FIRMWARE: ${{ needs.draft.outputs.firmware }}
-          FIRMWARE_SHA256: ${{ needs.draft.outputs.firmware_sha256 }}
-          LOADER: ${{ needs.draft.outputs.loader }}
-          LOADER_SHA256: ${{ needs.draft.outputs.loader_sha256 }}
+          DRAFTS: ${{ needs.draft.outputs.drafts }}
         run: |
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          if [ -n "$FIRMWARE" ]; then
-            tag=$(scripts/publish-fmc promote "$FIRMWARE" "$FIRMWARE_SHA256" out)
+          # the list on fd 3, so a command in the loop can never read it from stdin
+          while read -r m kind id sha <&3; do
+            [ -n "$id" ] || continue
+            tag=$(scripts/publish-fmc promote "$id" "$sha" out "$m")
             git tag "$tag" "$GITHUB_SHA" && git push origin "$tag"
-          fi
-          if [ -n "$LOADER" ]; then
-            tag=$(scripts/publish-fmc promote "$LOADER" "$LOADER_SHA256" out)
-            git tag "$tag" "$GITHUB_SHA" && git push origin "$tag"
-            gh release create "$tag" out/loader.wp2app --title "App Loader $tag" --notes "Built from $GITHUB_SHA."
-          fi
+            if [ "$kind" = loader ]; then
+              f=out/loader.wp2app; [ "$m" = wp3 ] && f=out/loader-wp3.wp2app
+              name="App Loader"; [ "$m" = wp3 ] && name="App Loader (Watch 3 Pro)"
+              gh release create "$tag" "$f" --title "$name $tag" --notes "Built from $GITHUB_SHA."
+            fi
+          done 3< <(tr ';' '\n' <<< "$DRAFTS")
