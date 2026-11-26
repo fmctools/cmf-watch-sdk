@@ -232,9 +232,9 @@ mod wp3 {
             return E_IO;
         }
         let offset = zone(ts, 0);
-        let offset = if offset.abs() <= 14 * 3600 { offset } else { 0 };
-        let t = wp2_core::port::civil(i64::from(ts) + i64::from(offset));
-        let utc_offset_min = (offset / 60) as i16;
+        let synced = offset.abs() <= 14 * 3600; // outside: never synced, UTC as local and i16::MIN (abi-1.1.md)
+        let t = wp2_core::port::civil(i64::from(ts) + if synced { i64::from(offset) } else { 0 });
+        let utc_offset_min = if synced { (offset / 60) as i16 } else { i16::MIN };
         unsafe { out.write(wp2_core::events::Time { utc_offset_min, ..t }) };
         0
     }
