@@ -6,6 +6,9 @@ mod ble;
 mod card;
 mod view;
 mod wfguard;
+mod wfimg;
+mod wfproc;
+mod wfsrc;
 
 use core::ffi::c_void;
 use wp2_core::layout::{stub_ram, StubRam};
@@ -27,6 +30,15 @@ pub struct StubHeader {
     power_down: extern "C" fn(),
     forced_reboot: extern "C" fn(),
     wf_parse: extern "C" fn(*mut u8, *mut u8) -> i32,
+    /// version 3: replaces the procedural widget type table (wfproc.rs)
+    proc_types: &'static [wfproc::Type; 9],
+    /// version 3: replaces `bl` of the image list lookup in the parser of tag 0x82 (wfproc.rs)
+    proc_list: unsafe extern "C" fn(),
+    /// version 3: replace the format mapping and the LZ4 call in the face's image loader (wfimg.rs)
+    image_cf: extern "C" fn(u32) -> u32,
+    image_unpack: unsafe extern "C" fn(),
+    /// version 3: the data source dispatcher's branch for a source past its table (wfsrc.rs)
+    source: unsafe extern "C" fn(),
 }
 
 unsafe impl Sync for StubHeader {}
@@ -35,7 +47,7 @@ unsafe impl Sync for StubHeader {}
 #[used]
 static HEADER: StubHeader = StubHeader {
     magic: *b"WP2S",
-    version: 2,
+    version: 3,
     boot: wp2_boot,
     ble: ble::wp2_ble_default,
     view_proc: view::wp2_view_proc,
@@ -47,6 +59,11 @@ static HEADER: StubHeader = StubHeader {
     power_down: wfguard::wp2_power_down,
     forced_reboot: wfguard::wp2_forced_reboot,
     wf_parse: wfguard::wp2_wf_parse,
+    proc_types: &wfproc::TYPES,
+    proc_list: wfproc::wp2_proc_list,
+    image_cf: wfimg::wp2_image_cf,
+    image_unpack: wfimg::wp2_image_unpack,
+    source: wfsrc::wp2_source,
 };
 
 // Replaces `bl 0x10146AA4` (ResFbHeap init, 4 of its 8 arguments on the stack) at 0x101884FA.

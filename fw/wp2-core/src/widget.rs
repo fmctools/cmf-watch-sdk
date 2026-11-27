@@ -209,7 +209,7 @@ mod tests {
         assert!(!accepts(&[&[V2, T_TEXT][..], &[0; 64]].concat(), 9), "template text neither");
         assert!(accepts(&[b'a'; 64], 9), "v1 on stub 10");
         assert!(!accepts(&r, 8), "stub 8 does not draw columns");
-        assert_eq!(first_stub(T_COLUMNS), Some(crate::layout::STUB_VERSION), "the stub that brings them");
+        assert_eq!(first_stub(T_COLUMNS), Some(10), "the stub that brings them");
         assert!(!accepts(&r, 0));
         assert!(!accepts(&columns(&[(b"Now", 16, b"1")]), 10), "no package has 17 icons");
         assert!(!accepts(&[V2, 7, 0], 99), "unknown template");

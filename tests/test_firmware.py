@@ -19,12 +19,25 @@ except (FileNotFoundError, ImportError):
     STOCK_WP3 = None
 
 
+BUILT_STUB = paths.ROOT / "target/wp2-stub.bin"
+
+
 def fake_stub(boot=0x1025A0A1, ble=0x1025A0C1, view_proc=0x1025A0E1, view_name=0x1025A100, applist=0, widget=0,
-              entry=None, guard=None):
-    """entry: a widget registry entry placed at WIDGET_AT; guard: a header version 2 with those five hooks."""
-    fields = (boot, ble, view_proc, view_name, applist, widget) + (guard or ())
-    head = struct.pack(f"<I{len(fields)}I", 2 if guard else 1, *fields)
-    stub = bytearray(b"WP2S" + head + bytes(0x100))
+              entry=None, guard=None, types=None,
+              proc_list=None, image_cf=None, image_unpack=None, source=None):
+    """entry: a widget registry entry placed at WIDGET_AT; guard: a header version 2 with those five hooks; types: a
+    header version 3 with that procedural widget table, placed at TYPES_AT; proc_list: its image list hook;
+    image_cf, image_unpack: the image loader's hooks; source: the data source hook."""
+    fields = (boot, ble, view_proc, view_name, applist, widget)
+    version = 1
+    if guard is not None or types is not None:
+        fields, version = fields + tuple(guard or (SKIP,) * 5), 2
+    if types is not None:
+        fields, version = fields + (TYPES_AT, proc_list or 0, image_cf or 0, image_unpack or 0, source or 0), 3
+    stub = bytearray(b"WP2S" + struct.pack(f"<I{len(fields)}I", version, *fields) + bytes(0x100 if types is None else 0x200))
+    if types is not None:
+        at = TYPES_AT - 0x1025A080
+        stub[at:at + len(types)] = types
     if entry is not None:
         at = WIDGET_AT - 0x1025A080
         stub[at:at + len(entry)] = entry
@@ -39,6 +52,32 @@ def widget_entry(wid=0x40, callbacks=CALLBACKS):
     return firmware.WGT_ENTRY.pack(wid, 3, 40, 0, 0xF0, *callbacks)
 
 
+TYPES_AT = 0x1025A180
+SKIP = 0x1025A0E1
+# the data source dispatcher's "no such source" branch (0x100DAA90): mvn r0, #0xf
+SOURCE_UNKNOWN, MVN_R0_15 = 0x100DAACC, bytes.fromhex("6ff00f00")
+# the parser of tag 0x82 looks the widget's first image up here and drops a widget without one
+PROC_LIST_CALL, STOCK_IMAGE_LIST = 0x100DB378, 0x101B7810
+# the face's image loader maps the header's format and unpacks LZ4; the header reader 0x101B8E28, whose format the
+# items are drawn with, maps it again
+IMAGE_CF_CALLS, STOCK_IMAGE_CF = (0x100DB7B6, 0x101B8E5E), 0x101B8FD2
+IMAGE_UNPACK_CALL, STOCK_IMAGE_UNPACK = 0x100DB9F0, 0x101822C0
+
+
+def type_table(stock=bytes(0x60), sentinel=(0xFF, SKIP, SKIP, SKIP, SKIP, 0), added=b""):
+    return stock + added + struct.pack("<6I", *sentinel)
+
+
+def lookup(app, table, kind, limit=4096):
+    """What the five stock loops do with a face's widget type: the matched entry, None for "skip"."""
+    for i in range(limit):
+        at = table - 0x10000000 + 0x18 * i
+        value = struct.unpack_from("<H", app, at)[0]
+        if value == kind:
+            return at + 0x10000000
+        if value == 0xFF:
+            return None
+    raise AssertionError(f"the loop for type {kind:#x} does not end")
 def wp3_stub(hooks):
     return b"WP3S" + struct.pack("<6I", 1, *hooks) + bytes(0x40)
 
@@ -50,9 +89,14 @@ def synthetic_app():
                         (firmware.VIEW_END_LITERALS, firmware.VIEW_TABLE_END)):
         for lit in lits:
             struct.pack_into("<I", app, lit - 0x10000000, value)
+    for lit in firmware.PROC_TYPES_LITERALS:
+        struct.pack_into("<I", app, lit - 0x10000000, firmware.PROC_TYPES)
+    app[SOURCE_UNKNOWN - 0x10000000:SOURCE_UNKNOWN - 0x10000000 + 4] = MVN_R0_15
     struct.pack_into("<I", app, firmware.APPLIST_LAYOUT - 0x10000000, firmware.STOCK_APPLIST_LAYOUT)
     for at, target in ((firmware.BOOT_CALL, firmware.STOCK_HEAP_INIT), (firmware.BLE_CALL, firmware.STOCK_BLE_READ),
-                       *((at, target) for at, target, _ in firmware.GUARD_WP2)):
+                       *((at, target) for at, target, _ in firmware.GUARD_WP2),
+                       (PROC_LIST_CALL, STOCK_IMAGE_LIST), *((c, STOCK_IMAGE_CF) for c in IMAGE_CF_CALLS),
+                       (IMAGE_UNPACK_CALL, STOCK_IMAGE_UNPACK)):
         app[at - 0x10000000:at - 0x10000000 + 4] = firmware.thumb_bl(at, target)
     return app
 
@@ -294,6 +338,90 @@ class FirmwareTest(unittest.TestCase):
                     dict(applist=0x1025A081 + 0x4000)):
             with self.subTest(**bad), self.assertRaisesRegex(ValueError, "stub"):
                 firmware.patch(STOCK, fake_stub(**bad))
+
+    def test_proc_types_patched(self):
+        out = synthetic_app()
+        firmware.add_stub(out, fake_stub(types=type_table()))
+        for lit in firmware.PROC_TYPES_LITERALS:
+            self.assertEqual(struct.unpack_from("<I", out, lit - 0x10000000)[0], TYPES_AT)
+        older = synthetic_app()
+        firmware.add_stub(older, fake_stub(guard=(SKIP,) * 5))
+        for lit in firmware.PROC_TYPES_LITERALS:
+            self.assertEqual(struct.unpack_from("<I", older, lit - 0x10000000)[0], firmware.PROC_TYPES)
+
+    def test_proc_list_hook_patched(self):
+        at = PROC_LIST_CALL - 0x10000000
+        out = synthetic_app()
+        firmware.add_stub(out, fake_stub(types=type_table(), proc_list=0x1025A0C1))
+        self.assertEqual(out[at:at + 4], firmware.thumb_bl(PROC_LIST_CALL, 0x1025A0C0))
+        plain = synthetic_app()
+        firmware.add_stub(plain, fake_stub(types=type_table()))
+        self.assertEqual(plain[at:at + 4], firmware.thumb_bl(PROC_LIST_CALL, STOCK_IMAGE_LIST))
+        with self.assertRaisesRegex(ValueError, "stub"):
+            firmware.add_stub(synthetic_app(), fake_stub(types=type_table(), proc_list=0x1025A0C0))
+
+    @skipUnless(HAVE_STOCK, "needs JX402_V1.0.0.73.bin")
+    def test_proc_list_call_is_stock(self):
+        at = PROC_LIST_CALL - 0x10000000
+        self.assertEqual(STOCK[at:at + 4], firmware.thumb_bl(PROC_LIST_CALL, STOCK_IMAGE_LIST))
+
+    def test_image_hooks_patched(self):
+        out = synthetic_app()
+        firmware.add_stub(out, fake_stub(types=type_table(), image_cf=0x1025A0C1, image_unpack=0x1025A0E1))
+        for call, hook in (*((c, 0x1025A0C0) for c in IMAGE_CF_CALLS), (IMAGE_UNPACK_CALL, 0x1025A0E0)):
+            at = call - 0x10000000
+            self.assertEqual(out[at:at + 4], firmware.thumb_bl(call, hook))
+        for bad in (dict(image_cf=0x1025A0C0, image_unpack=0x1025A0E1), dict(image_cf=0x1025A0C1, image_unpack=0x1025A0E0)):
+            with self.subTest(**bad), self.assertRaisesRegex(ValueError, "stub"):
+                firmware.add_stub(synthetic_app(), fake_stub(types=type_table(), **bad))
+
+    @skipUnless(HAVE_STOCK, "needs JX402_V1.0.0.73.bin")
+    def test_image_calls_are_stock(self):
+        for call, target in (*((c, STOCK_IMAGE_CF) for c in IMAGE_CF_CALLS), (IMAGE_UNPACK_CALL, STOCK_IMAGE_UNPACK)):
+            at = call - 0x10000000
+            self.assertEqual(STOCK[at:at + 4], firmware.thumb_bl(call, target))
+
+    def test_source_hook_patched(self):
+        at = SOURCE_UNKNOWN - 0x10000000
+        out = synthetic_app()
+        firmware.add_stub(out, fake_stub(types=type_table(), source=0x1025A0C1))
+        self.assertEqual(out[at:at + 4], firmware.thumb_b_w(SOURCE_UNKNOWN, 0x1025A0C0))
+        with self.assertRaisesRegex(ValueError, "stub"):
+            firmware.add_stub(synthetic_app(), fake_stub(types=type_table(), source=0x1025A0C0))
+
+    @skipUnless(HAVE_STOCK, "needs JX402_V1.0.0.73.bin")
+    def test_source_branch_is_stock(self):
+        at = SOURCE_UNKNOWN - 0x10000000
+        self.assertEqual(STOCK[at:at + 4], MVN_R0_15)
+
+    def test_proc_types_checked(self):
+        own = lambda *fields: struct.pack("<6I", *fields)
+        for name, table in (("stock types changed", type_table(stock=b"\1" + bytes(0x5F))),
+                            ("no 0xff end", type_table(sentinel=(0xFFFF, SKIP, SKIP, SKIP, SKIP, 0))),
+                            ("0xff matches and calls 0", type_table(sentinel=(0xFF, 0, 0, 0, 0, 0))),
+                            ("handler outside the stub", type_table(added=own(6, 0x100E2639, SKIP, SKIP, SKIP, 0))),
+                            ("handler without Thumb", type_table(added=own(6, SKIP & ~1, SKIP, SKIP, SKIP, 0)))):
+            with self.subTest(name), self.assertRaisesRegex(ValueError, "type table"):
+                firmware.add_stub(synthetic_app(), fake_stub(types=table))
+
+    @skipUnless(HAVE_STOCK and BUILT_STUB.is_file(), "needs JX402_V1.0.0.73.bin and scripts/build-fw")
+    def test_unknown_proc_type_is_skipped(self):
+        stock = firmware.PROC_TYPES
+        # the stock ends its table with 0xFFFF but stops at 0xFF: type 4 would match a property row 55 entries past it
+        self.assertEqual(lookup(STOCK, stock, 4), 0x101F4294)
+        out = firmware.patch(STOCK, BUILT_STUB.read_bytes())
+        table = struct.unpack_from("<I", out, firmware.PROC_TYPES_LITERALS[0] - 0x10000000)[0]
+        self.assertNotEqual(table, stock)
+        for kind in range(0x10000):
+            at = lookup(out, table, kind, limit=16)
+            if kind < 4:
+                self.assertEqual(out[at - 0x10000000:at - 0x10000000 + 0x18],
+                                 STOCK[stock - 0x10000000 + 0x18 * kind:stock - 0x10000000 + 0x18 * (kind + 1)])
+            elif kind in (4, 5, 6, 7, 0xFF):  # the stub's types; the end, matched by a face of that type
+                self.assertTrue(0x1025A080 <= at < 0x1025A080 + len(BUILT_STUB.read_bytes()))
+                self.assertEqual(struct.unpack_from("<H", out, at - 0x10000000)[0], kind)
+            else:
+                self.assertIsNone(at)
 
     def test_wf_guard_calls_patched(self):
         hooks = (0x1025A0A1, 0x1025A0C1, 0x1025A0E1, 0x1025A0F1, 0x1025A111)

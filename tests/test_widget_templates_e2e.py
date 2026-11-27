@@ -73,7 +73,7 @@ class WidgetTemplatesTest(unittest.TestCase):
         OUT.mkdir(parents=True, exist_ok=True)
         with harness.installed(["loader", "widget-columns", "hello"], name="widget-templates") as (emu, port):
             cli = lambda *a: harness.cli_out([*a, "--hci-port", port])
-            self.assertEqual(json.loads(cli("list"))["stub"]["version"], 10)
+            self.assertEqual(json.loads(cli("list"))["stub"]["version"], 11)
             cli("cards", "set", "widgets:0x40/1,0x40/2")
             harness.ready(emu)
             names = self.shot(emu, "0-names")
@@ -195,7 +195,7 @@ class WidgetTemplatesTest(unittest.TestCase):
 
             harness.swap_app(emu, (paths.ROOT / "target" / "app-wp2.bin").read_bytes())
             listing = json.loads(harness.cli_out(["list", "--hci-port", port]))
-            self.assertEqual(listing["stub"]["version"], 10)
+            self.assertEqual(listing["stub"]["version"], 11)
             self.assertEqual(listing["slots"]["0"]["name"], "widget-columns", "the same NAND")
             harness.ready(emu)
             self.assertEqual(harness.read_file(emu, b"/NAND:/wp2apps/0.wgt", 128),

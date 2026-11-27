@@ -9,8 +9,8 @@ pub const LOADER_ABI_MINOR: u16 = 3;
 // the stub's own release, bumped with every stub change that goes out by OTA. A host reads it with INFO for
 // STUB_SLOT (docs/abi-1.4.md, "Stub version"): the watch reports 1.0.0.73 whatever app.bin it runs, so this is the
 // only way to tell one patched firmware from another. 1 = every stub before the field was readable. Not the stub
-// header's `version`: that one is the header format, which `wp2apps firmware` checks is 1 or 2 (2 adds
-// the watch face guard's hooks).
+// header's `version`: that one is the header format, which `wp2apps firmware` checks is 1..3 (2 adds
+// the watch face guard's hooks, 3 the procedural widget, image and data source hooks).
 // 3 = the Apps widget in wgt_reg slot 0x40 (docs/recon.md, "Widget cards")
 // 4 = app widgets: 0x40 with param_id slot + 1 shows the app's record and launches it on a tap
 // 5 = app pages: views 0xF8 + slot run the loader too, which starts that app (cards.rs)
@@ -20,7 +20,9 @@ pub const LOADER_ABI_MINOR: u16 = 3;
 // 9 = watch face guard: a face that takes the watch down, booted or picked, gives way to a built-in (wfguard.rs)
 // 10 = widget templates: v2 `.wgt` records (`text`, `columns`), widget icons from the package trailer, PUSH kind 00
 //     takes v2 records (wp2_core::widget, docs/widget-push.md)
-pub const STUB_VERSION: u32 = 10;
+// 11 = Watch 3 Pro faces: widget types 4..7 are drawn, an unknown one is skipped (wfproc.rs), ETC2 images (wfimg.rs),
+//      the theme source 0x99 (wfsrc.rs)
+pub const STUB_VERSION: u32 = 11;
 // INFO for this slot answers the stub's version instead of a package header; an older stub answers BadRequest
 pub const STUB_SLOT: u8 = 0xFE;
 pub const STUB_RAM: u32 = 0x3871_EEC0;

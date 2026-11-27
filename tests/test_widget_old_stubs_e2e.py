@@ -115,10 +115,10 @@ class OldStubsTest(unittest.TestCase):
     @skipUnless(OLD_LOADERS, "set WP2_OLD_LOADERS (released loader packages)")
     def test_released_loaders_run_the_app_and_answer_22(self):
         for loader in OLD_LOADERS:
-            for stub in (*OLD_STUBS, 10):  # 10: after the OTA, before the loader update, with the trailer on NAND
+            for stub in (*OLD_STUBS, 11):  # 11 (this build): after the OTA, before the loader update, with the trailer on NAND
                 name = f"stub{stub}-{loader.stem}"
                 with self.subTest(name), watch(stub, loader, name) as (emu, port):
-                    session(port, lambda s: install.upload(s, 0, self.full if stub == 10 else self.plain))
+                    session(port, lambda s: install.upload(s, 0, self.full if stub == 11 else self.plain))
                     self.falls_back(emu, name)
 
 

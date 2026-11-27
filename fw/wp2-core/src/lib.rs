@@ -3,6 +3,7 @@
 pub mod aes;
 pub mod cards;
 pub mod chan;
+pub mod etc2;
 pub mod events;
 pub mod font8x8;
 #[cfg(target_os = "none")]
@@ -21,4 +22,5 @@ pub mod pwm;
 pub mod stock;
 pub mod storage;
 pub mod wfguard;
+pub mod wfproc;
 pub mod widget;

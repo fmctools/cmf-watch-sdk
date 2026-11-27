@@ -396,7 +396,8 @@ can't be read back. So the stub answers its own release:
   view ids end at 237; `wp2apps firmware` adds 17 table entries). Stub 8 with `PUSH` is `0x2F31` bytes
   and stub + table exactly `0x4000`: the stub's flash region went from `0x3000` to `0x5000` and `STUB_MAX` from
   `0x4000` to `0x6000` so the next change has room. Both are budgets of our own (the NOR app partition has ≈ 964 KiB
-  free after `app.bin`, `docs/recon.md`).
+  free after `app.bin`, `docs/recon.md`) Stub 11 with the Watch 3 Pro faces is `0x50F4` bytes before its memory fix: the region went to
+  `0x6000` and `STUB_MAX` to `0x7000`.
   The phone's `0x906D` view card carries the id as `u16` LE: `02 00 07 01` is slot 15's page.
 - **Widgets.** `0x40` with `param_id = slot + 1`, so `1..16`.
 - **Loader.** Reads the stub's release from `StubRam.stub_version` behind `version_magic = "WPSV"` (stub 8 sets both
