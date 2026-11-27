@@ -7,7 +7,7 @@ use core::ptr::{addr_of_mut, null_mut};
 use core::sync::atomic::{AtomicI32, AtomicU32, AtomicU8, Ordering};
 use wp2_core::events::{Event, CROWN, LV};
 use wp2_core::layout::stub_ram;
-use wp2_core::lvcmd::{self, Class, Rec, Table, FOCUS_MAX, MAX_FONTS, MAX_OBJS, MAX_OPTIONS};
+use wp2_core::lvcmd::{self, Class, Rec, Table, FOCUS_MAX, MAX_FONTS, MAX_IMAGES, MAX_OBJS, MAX_OPTIONS};
 use wp2_core::stock::*;
 
 type Obj = *mut c_void;
@@ -72,9 +72,10 @@ struct Lv {
     focus_icon: u16,
     focus_sel: i16,
     focus_last: [u32; FOCUS_MAX],
-    /// `lv_img_dsc_t` per handle for IMAGE_SRC: in the loader block, so it outlives the batch buffer and dies
-    /// with the objects (docs/bitmap-assets.md). Its `data` points into the app block.
-    dsc: [ImgDsc; MAX_OBJS + 1],
+    /// `lv_img_dsc_t` per image object for IMAGE_SRC, with its handle (0 = free): in the loader block, so it
+    /// outlives the batch buffer; freed with the object (docs/bitmap-assets.md). Its `data` points into the app block.
+    /// A pool, not one per handle: the loader block has no room for 193 of them (validate allows MAX_IMAGES).
+    dsc: [(u16, ImgDsc); MAX_IMAGES],
 }
 
 #[derive(Clone, Copy)]
@@ -100,7 +101,7 @@ static mut LV_STATE: Lv = Lv {
     focus_icon: 0,
     focus_sel: -1,
     focus_last: [0; FOCUS_MAX],
-    dsc: [NO_DSC; MAX_OBJS + 1],
+    dsc: [(0, NO_DSC); MAX_IMAGES],
 };
 
 fn st() -> &'static mut Lv {
@@ -345,13 +346,22 @@ fn exec(r: &Rec) -> Result<(), i32> {
                     stock!(LV_OBJ_DEL, fn(Obj))(s.objs[x]);
                 }
                 s.objs[x] = null_mut();
+                if let Some(d) = s.dsc.iter_mut().find(|d| d.0 == x as u16) {
+                    d.0 = 0;
+                }
             }
         }
         Rec::AppIcon {h,slot,side} => crate::menu::lv::app_icon(o(h),slot,side)?,
         Rec::Image { h, ptr, w, hh, cf } => {
             // The app may have written its pixels since the package load: clean the cache so LVGL reads them.
             wp2_core::load::sync_psram(ptr as *mut u8, u32::from(w) * u32::from(hh) * 2);
-            let d = &mut s.dsc[h as usize];
+            // validate keeps at most MAX_IMAGES image objects, and DEL frees theirs: a slot is always there
+            let Some(slot) = s.dsc.iter_mut().position(|d| d.0 == h).or_else(|| s.dsc.iter().position(|d| d.0 == 0))
+            else {
+                return Err(E_ARG);
+            };
+            let (owner, d) = &mut s.dsc[slot];
+            *owner = h;
             d.header = u32::from(cf) | u32::from(w) << 10 | u32::from(hh) << 21;
             d.data_size = u32::from(w) * u32::from(hh) * 2;
             d.data = ptr as *const u8;
@@ -661,7 +671,7 @@ pub fn teardown() {
         }
     }
     s.fonts_open = 0;
-    s.dsc = [NO_DSC; MAX_OBJS + 1];
+    s.dsc = [(0, NO_DSC); MAX_IMAGES];
     s.objs = [null_mut(); MAX_OBJS + 1];
     s.events = [0; MAX_OBJS + 1];
     s.options = [0; MAX_OBJS + 1];

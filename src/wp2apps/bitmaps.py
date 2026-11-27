@@ -8,7 +8,6 @@ import argparse
 import re
 import struct
 import sys
-import zlib
 from pathlib import Path
 
 from . import icon
@@ -18,82 +17,8 @@ MAX_SIDE = 466
 SOFT_BYTES = 48 * 1024
 
 
-def read_rgba(data: bytes) -> tuple[int, int, bytes]:
-    """8-bit gray, RGB, palette, gray+alpha or RGBA, non-interlaced -> (w, h, rgba)."""
-    if data[:8] != b"\x89PNG\r\n\x1a\n":
-        raise ValueError("not a PNG")
-    pos, idat = 8, b""
-    w = h = 0
-    color = plte = trns = None
-    while pos < len(data):
-        n, kind = struct.unpack_from(">I4s", data, pos)
-        body = data[pos + 8:pos + 8 + n]
-        if kind == b"IHDR":
-            w, h, depth, color, _, _, interlace = struct.unpack(">IIBBBBB", body)
-            if depth != 8 or interlace != 0:
-                raise ValueError("PNG must be 8-bit, not interlaced")
-        elif kind == b"PLTE":
-            plte = body
-        elif kind == b"tRNS":
-            trns = body
-        elif kind == b"IDAT":
-            idat += body
-        pos += 12 + n
-    if color is None or color not in (0, 2, 3, 4, 6):
-        raise ValueError(f"unsupported PNG color type {color}")
-    if not w:
-        raise ValueError("PNG has no IHDR")
-    if color == 3 and (plte is None or len(plte) % 3):
-        raise ValueError("palette PNG without a usable PLTE")
-
-    channels = {0: 1, 2: 3, 3: 1, 4: 2, 6: 4}[color]
-    raw = zlib.decompress(idat)
-    stride = w * channels
-    out, prev = bytearray(), bytearray(stride)
-    for y in range(h):
-        f, line = raw[y * (stride + 1)], bytearray(raw[y * (stride + 1) + 1:(y + 1) * (stride + 1)])
-        for i in range(stride):
-            a = line[i - channels] if i >= channels else 0
-            b, c = prev[i], prev[i - channels] if i >= channels else 0
-            if f == 1:
-                line[i] = (line[i] + a) & 0xFF
-            elif f == 2:
-                line[i] = (line[i] + b) & 0xFF
-            elif f == 3:
-                line[i] = (line[i] + (a + b) // 2) & 0xFF
-            elif f == 4:
-                p = a + b - c
-                pa, pb, pc = abs(p - a), abs(p - b), abs(p - c)
-                line[i] = (line[i] + (a if pa <= pb and pa <= pc else b if pb <= pc else c)) & 0xFF
-            elif f:
-                raise ValueError(f"bad PNG filter {f}")
-        out += line
-        prev = line
-
-    rgba = bytearray(w * h * 4)
-    if color == 6:
-        rgba[:] = out
-    elif color == 2:
-        for i in range(w * h):
-            rgba[4 * i:4 * i + 3] = out[3 * i:3 * i + 3]
-            rgba[4 * i + 3] = 0xFF
-    elif color == 0:
-        transparent = struct.unpack(">H", trns[:2])[0] if trns and len(trns) >= 2 else None
-        for i, v in enumerate(out):
-            rgba[4 * i:4 * i + 3] = bytes([v]) * 3
-            rgba[4 * i + 3] = 0 if v == transparent else 0xFF
-    elif color == 4:
-        for i in range(w * h):
-            g, a = out[2 * i], out[2 * i + 1]
-            rgba[4 * i:4 * i + 3] = bytes([g]) * 3
-            rgba[4 * i + 3] = a
-    else:  # palette
-        for i, p in enumerate(out):
-            if p * 3 + 3 > len(plte):
-                raise ValueError(f"palette index {p} has no entry")
-            rgba[4 * i:4 * i + 3] = plte[3 * p:3 * p + 3]
-            rgba[4 * i + 3] = trns[p] if trns and p < len(trns) else 0xFF
-    return w, h, bytes(rgba)
+# ponytail: one PNG decoder for icons and bitmaps
+read_rgba = icon.read_png
 
 
 def rgb565(w: int, h: int, rgba: bytes) -> bytes:

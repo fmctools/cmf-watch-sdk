@@ -5,7 +5,7 @@ An app can carry bitmap images and draw them. Two paths, one pixel format, no pa
 - **Canvas apps** (`cmf-wp2-ui` or raw `rect`): `Api::pixels` copies RGB565 pixels into the framebuffer through the
   `BLIT` record (`lv_submit` opcode `0x1B`, like `SENSOR`: handled on the app thread, no LVGL needed).
 - **LVGL apps**: `Batch::image` creates an `lv_img` object and `Batch::set_image` points it at the app's pixels
-  through `IMAGE_SRC` (opcode `0x19`). The loader builds an `lv_img_dsc_t` per handle and draws **in place** — the
+  through `IMAGE_SRC` (opcode `0x19`). The loader keeps an `lv_img_dsc_t` for each of at most **8 image objects** alive at once and draws **in place** — the
   pixels are never copied and never leave the app block.
 
 Both read the pixels from the app's own package image, exactly like the menu icon has always done: they are an
@@ -56,6 +56,8 @@ working:
 | Package image (all assets + icon + code + data + bss) | **131 072 B (128 KiB)** — `wp2apps pack` refuses more | `APP_SIZE`, `fw/wp2-core/src/layout.rs` |
 | Recommended total for bitmap pixels | **49 152 B (48 KiB)** — the generator warns above it; leaves ~80 KiB for code, data, bss and the 27 664 B menu icon | `wp2apps.bitmaps` `SOFT_BYTES` |
 | One bitmap | **1..=466 px** each side (validated by loader and generator); opaque RGB565, **2 B per pixel** | `lvcmd::check`, `wp2apps.bitmaps` |
+| Image objects (LVGL) | **≤ 8 alive at once** (`MAX_IMAGES`): CREATE of a ninth is refused (`INVALID`); DEL frees one. Canvas `pixels` has no such limit | `lvcmd::check`, loader descriptor pool |
+| Pixel pointer | **2-aligned** (`&[u16]` always is); an odd `ptr` is refused (`BLIT` then falls back to rects) | `lvcmd::blit`, `image_src_in` |
 | Full-screen baked image | **Impossible**: 466x466 = 434 312 B > the whole package. Stream it instead (below), or bake a cropped/scaled version | `FB_BYTES` vs `APP_SIZE` |
 | Typical sizes | 40x40 = 3 200 B, 64x64 = 8 192 B, 96x96 = 18 432 B, 128x128 = 32 768 B — a rule of thumb is **at most 2-3 medium (96x96) or ~6 small (64x64) bitmaps** in an app that also has real code | arithmetic |
 | Bitmap count | no explicit cap — the package byte budget is the cap | — |

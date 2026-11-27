@@ -49,7 +49,7 @@ picks the lowest free handle and keeps the same table as the loader.
 
 | op | name | payload | LVGL call | Checks |
 |---|---|---|---|---|
-| 0x01 | CREATE | `class u8, parent u16`; classes 0 obj, 1 label, 2 btn, 3 arc, 4 bar, 5 slider, 6 roller, 12 image (a bitmap over the app's own pixels) | `lv_<class>_create(parent)` | handle free; parent live and not a scroll bar; class 7 is refused |
+| 0x01 | CREATE | `class u8, parent u16`; classes 0 obj, 1 label, 2 btn, 3 arc, 4 bar, 5 slider, 6 roller, 12 image (a bitmap over the app's own pixels; at most 8 alive) | `lv_<class>_create(parent)` | handle free; parent live and not a scroll bar; class 7 is refused |
 | 0x02 | DEL | – | `lv_obj_del` | not the root, **not a scroll bar** (`BadClass`; a bar goes with its target, which keeps callbacks into it). Frees the handle, every descendant and the scroll bars that target a freed object |
 | 0x03 | SIZE | `w i32, h i32` raw `lv_coord_t` | `lv_obj_set_size` | not the root. `LV_PCT(n)` = `0x2000_0000 \| n`, `LV_SIZE_CONTENT` = `0x2000_07D1` (SDK: `pct`, `CONTENT`) |
 | 0x04 | ALIGN | `align u8, x i16, y i16` | `lv_obj_align` | not the root; `align` 0..=21 |

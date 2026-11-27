@@ -56,8 +56,8 @@ class IconTest(unittest.TestCase):
             icon.parse(desc[:4] + b"\x02" + desc[5:])
         with self.assertRaisesRegex(ValueError, "96x96"):
             icon.encode(8, 8, bytes(8 * 8 * 4))
-        with self.assertRaisesRegex(ValueError, "RGBA"):
-            icon.read_png(png(S, S, b"")[:24] + b"\x08\x02" + png(S, S, b"")[26:])
+        with self.assertRaisesRegex(ValueError, "8-bit"):
+            icon.read_png(png(S, S, b"")[:24] + b"\x10\x06" + png(S, S, b"")[26:])
 
     def test_package_validates_icon(self):
         image = good() + b"\x70\x47"

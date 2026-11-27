@@ -13,6 +13,9 @@ struct Aligned([u8; 128]);
 // The receive buffer: one host message (MSG_MAX 128), 2-aligned so DATA payloads read as RGB565 words
 static mut BUF: Aligned = Aligned([0; 128]);
 
+// Status line under the picture: still inside the round panel (about 320 px wide at this height)
+const DONE_Y: i16 = 408;
+
 fn centre(text: &str) -> i16 {
     233 - 8 * text.len() as i16
 }
@@ -55,11 +58,14 @@ fn main(api: &'static Api) -> i32 {
                             }
                             api.show();
                         }
-                        Some(Msg::Done) if receiving.is_some() => {
-                            // keep the picture: only the status line at the bottom changes
-                            api.rect(0, 216, api.width, 24, 0);
-                            status_line(api, "done", 0x3B69);
-                            api.show();
+                        Some(Msg::Done) => {
+                            // keep the picture: "done" goes below it, and only when it fits (a picture taller than
+                            // 400 px is its own "done")
+                            let Some((_, h)) = receiving else { continue };
+                            if (api.height - h) / 2 + h <= DONE_Y as u16 - 8 {
+                                api.text(centre("done"), DONE_Y, "done", 0x3B69);
+                                api.show();
+                            }
                         }
                         _ => {}
                     }
@@ -76,8 +82,4 @@ fn main(api: &'static Api) -> i32 {
             _ => {}
         }
     }
-}
-
-fn status_line(api: &Api, text: &str, colour: u16) {
-    api.text(centre(text), 224, text, colour);
 }
