@@ -97,11 +97,12 @@ def cli_out(args) -> str:
 
 
 @contextmanager
-def installed(names, name="installed", fixtures=None):
-    """Booted paired watch on Netsim with target/<name>.wp2app installed for each name; yields (emu, hci port)."""
+def installed(names, name="installed", fixtures=None, wav=False):
+    """Booted paired watch on Netsim with target/<name>.wp2app installed for each name; yields (emu, hci port).
+    wav: the speaker is recorded to <run>/audio.wav (headless only)."""
     from .netsim import netsim
     nor = patched_paired_nor()  # runs its own Netsim: two netsimd on one instance exit
-    with netsim() as port, Emu(name, nor=nor, fixtures=fixtures, hci_port=port) as emu:
+    with netsim() as port, Emu(name, nor=nor, fixtures=fixtures, hci_port=port, wav=wav) as emu:
         emu.wait_uart("launcher enter", 60)
         emu.keep_awake()
         for name in names:
@@ -136,11 +137,13 @@ class Qmp:
 
 class Emu:
     def __init__(self, name: str, *, nor: bytes, fixtures: Path | None = None, hci_port: int | None = None,
-                 seconds: int = 900):
+                 seconds: int = 900, wav: bool = False):
         stamp = time.strftime("%H%M%S")
         self.run = RUNS / f"{name}-{stamp}"
         self.inputs = RUNS / f"{name}-{stamp}-in"
-        self.nor, self.hci_port, self.seconds = nor, hci_port, seconds
+        self.nor, self.hci_port, self.seconds, self.wav = nor, hci_port, seconds, wav
+        # sound is paced by the host's clock: the guest must not skip its idle time (fast_qemu) while it plays
+        self.realtime = wav or bool(os.environ.get("WP2_REALTIME"))
         self.fixtures = fixtures or paths.cmf_watch_utils() / "fixtures"
         self.qmp_port, self.gdb_port = free_port(), free_port()
         self.vm = self.qmp = None
@@ -150,9 +153,10 @@ class Emu:
         self.inputs.mkdir(parents=True)
         (self.inputs / "in-nor.bin").write_bytes(self.nor)
         # WP2_GUI=1: live window (needs Tk 8.6 wish, nix-shell -p tk)
-        view = [] if os.environ.get("WP2_GUI") else ["--headless"]
+        view = [] if os.environ.get("WP2_GUI") else ["--headless", *(["--wav"] if self.wav else [])]
         argv = ["uv", "run", "--locked", "cmf-watch-utils", "emu", "run", *view, "--allow-reboot",
-                "--fixtures", str(self.fixtures), "--qemu", str(fast_qemu(self.inputs)), "--rom", str(cmf / "runtime/compat.bin"),
+                "--fixtures", str(self.fixtures),
+                "--qemu", str(QEMU if self.realtime else fast_qemu(self.inputs)), "--rom", str(cmf / "runtime/compat.bin"),
                 "--nor", str(self.inputs / "in-nor.bin"), "--qmp-port", str(self.qmp_port),
                 "--seconds", str(self.seconds), "--output", str(self.run)]
         if self.hci_port:

@@ -9,12 +9,15 @@ pub enum Action {
     Pause,
     Msg(Vec<u8>),
     Shot(String),
+    /// the watch's GPS receiver: lat, lon (1e-7°), altitude (dm), fix quality, satellites
+    Gps(i32, i32, i32, u8, u8),
 }
 
 const TAP_MS: u32 = 80;
 
 /// `t X Y [MS]` touch down, up MS later (80) | `down X Y` | `up X Y` | `c N` N crown detents, sign = direction |
-/// `b` button | `p` pause/resume toggle | `m TEXT` host message | `mx HEX` binary message | `wait MS` | `shot NAME`.
+/// `b` button | `p` pause/resume toggle | `m TEXT` host message | `mx HEX` binary message | `wait MS` | `shot NAME` |
+/// `gps LAT LON [ALT_M [FIX [SATS]]]` the GPS receiver's position from now (fix 1, 8 satellites; `gps none`: no fix).
 /// Returns the timeline sorted by time; commands after a `t` do not wait for its release.
 pub fn parse(src: &str) -> Result<Vec<(u32, Action)>, String> {
     let mut at = 0u32;
@@ -48,6 +51,15 @@ pub fn parse(src: &str) -> Result<Vec<(u32, Action)>, String> {
             "mx" => out.push((at, Action::Msg(crate::out::unhex(rest).ok_or_else(err)?))),
             "wait" => at += n(0)? as u32,
             "shot" if !rest.is_empty() => out.push((at, Action::Shot(rest.into()))),
+            "gps" if rest == "none" => out.push((at, Action::Gps(0, 0, 0, 0, 0))),
+            "gps" => {
+                let f = |k: usize| -> Result<f64, String> { args.get(k).and_then(|a| a.parse().ok()).ok_or_else(err) };
+                let e7 = |d: f64| (d * 1e7).round() as i32;
+                let alt = if args.len() > 2 { (f(2)? * 10.0).round() as i32 } else { 0 };
+                let fix = if args.len() > 3 { n(3)? as u8 } else { 1 };
+                let sats = if args.len() > 4 { n(4)? as u8 } else { 8 };
+                out.push((at, Action::Gps(e7(f(0)?), e7(f(1)?), alt, fix, sats)));
+            }
             _ => return Err(err()),
         }
     }

@@ -104,16 +104,20 @@ impl Queue {
     }
 }
 
+/// `BUTTON`'s `x`: 0 the crown press, 1 the back swipe (loader 3 on; before, both 0). An app that owns back may
+/// close on the press and go back on the swipe.
+pub const FROM_SWIPE: i16 = 1;
+
 pub fn map_key(value: u32) -> Option<Event> {
-    let (kind, delta) = match value {
-        KEY_CROWN_CW => (CROWN, 1),
-        KEY_CROWN_CCW => (CROWN, -1),
-        KEY_CROWN_PRESS => (BUTTON, 0),
+    let (kind, delta, x) = match value {
+        KEY_CROWN_CW => (CROWN, 1, 0),
+        KEY_CROWN_CCW => (CROWN, -1, 0),
+        KEY_CROWN_PRESS => (BUTTON, 0, 0),
         // the app leaves as on the button and the loader shows its menu, not the stock app list
-        v if v & 0xFFFF == KEY_BACK => (BUTTON, 0),
+        v if v & 0xFFFF == KEY_BACK => (BUTTON, 0, FROM_SWIPE),
         _ => return None,
     };
-    Some(Event { kind, delta, ..Event::default() })
+    Some(Event { kind, delta, x, ..Event::default() })
 }
 
 #[repr(C)]
@@ -268,8 +272,8 @@ mod tests {
     fn key_mapping() {
         assert_eq!(map_key(0xFFFF_006F).map(|e| (e.kind, e.delta)), Some((3, 1)));
         assert_eq!(map_key(0xFFFF_006E).map(|e| (e.kind, e.delta)), Some((3, -1)));
-        assert_eq!(map_key(0x0400_0001).map(|e| e.kind), Some(4));
-        assert_eq!(map_key(0xFFFF_0071).map(|e| e.kind), Some(4));
+        assert_eq!(map_key(0x0400_0001).map(|e| (e.kind, e.x)), Some((4, 0)));
+        assert_eq!(map_key(0xFFFF_0071).map(|e| (e.kind, e.x)), Some((4, FROM_SWIPE)));
         assert_eq!(map_key(0x2000_0001), None);
     }
 

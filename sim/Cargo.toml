@@ -11,6 +11,7 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 cmf-wp2-app = { path = "../sdk/cmf-wp2-app" }
+cmf-wp2-ui = { path = "../sdk/cmf-wp2-ui" }
 wp2-core = { path = "../fw/wp2-core" }
 minifb = "0.29"
 png = "0.18"

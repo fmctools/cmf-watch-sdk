@@ -236,6 +236,15 @@ def cmd_send(args):
     print(json.dumps({"sent": len(data)}))
 
 
+def cmd_play(args):
+    from . import play
+    samples = play.pcm16k(args.file, args.start, args.seconds)
+    title = args.title or args.file.stem
+    print(json.dumps({"file": args.file.name, "seconds": round(len(samples) / play.RATE, 1)}), flush=True)
+    result = asyncio.run(with_watch(args, lambda s: play.play(s, samples, title, args.volume), resume=True))
+    print(json.dumps(result))
+
+
 def cmd_listen(args):
     async def listen(s):
         state = await channel.ping(s)
@@ -379,6 +388,7 @@ def parser():
                                  ("list", cmd_list, "List installed packages"),
                                  ("send", cmd_send, "Send one message to the running app (ABI 1.1)"),
                                  ("listen", cmd_listen, "Print the running app's messages as JSON lines"),
+                                 ("play", cmd_play, "Stream an audio file to the Speaker app (16 kHz IMA ADPCM)"),
                                  ("chat", cmd_chat, "Type lines to the running app, print what it sends back"),
                                  ("push", cmd_push, "Set an app's widget text or start blob while it does not run "
                                   "(stub 8, docs/widget-push.md); no --title/--blob clears the widget")):
@@ -401,6 +411,12 @@ def parser():
             sub.add_argument("data")
             sub.add_argument("--hex", action="store_true", help="DATA is hex, not UTF-8 text")
             sub.add_argument("--wait", type=float, default=10.0, help="seconds to retry a full or paused inbox")
+        if name == "play":
+            sub.add_argument("file", type=Path, help="any file macOS plays (MP3, M4A, WAV, AIFF, FLAC)")
+            sub.add_argument("--title", help="shown on the watch (default: the file name)")
+            sub.add_argument("--volume", type=int, help="0..100 percent (default: the app's 70)")
+            sub.add_argument("--start", type=float, default=0.0, help="seconds into the file")
+            sub.add_argument("--seconds", type=float, help="how much to play (default: all)")
         if name == "listen":
             sub.add_argument("--count", type=int)
             sub.add_argument("--seconds", type=float)

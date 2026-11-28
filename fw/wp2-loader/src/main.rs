@@ -10,6 +10,10 @@ macro_rules! stock {
 #[cfg(target_os = "none")]
 mod app;
 #[cfg(target_os = "none")]
+mod mic;
+#[cfg(target_os = "none")]
+mod audio;
+#[cfg(target_os = "none")]
 mod gps;
 #[cfg(target_os = "none")]
 mod hr;
@@ -22,12 +26,15 @@ mod music;
 mod menu;
 #[cfg(target_os = "none")]
 mod motor;
+mod owner;
 #[cfg(target_os = "none")]
 mod storage;
 #[cfg(target_os = "none")]
 mod svc;
 #[cfg(target_os = "none")]
 mod ui;
+#[cfg(target_os = "none")]
+mod status;
 
 #[cfg(target_os = "none")]
 mod view {
@@ -348,7 +355,10 @@ mod view {
         svc::tick(app::running(), app::paused());
         crate::hr::tick(app::running(), app::paused());
         crate::gps::tick(app::running(), app::paused());
+        crate::status::tick();
         crate::media::tick(app::running(), app::paused());
+        crate::audio::tick(app::running(), app::paused());
+        crate::mic::tick(app::running(), app::paused());
         crate::music::tick();
         hold_face(app::running() && m.page.is_none());
         if app::running() {

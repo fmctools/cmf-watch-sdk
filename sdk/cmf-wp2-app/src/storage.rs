@@ -210,6 +210,113 @@ impl<'a> Storage<'a> {
         })
     }
 }
+/// Deletes every file the running app keeps with the FILE service (`/NAND:/wp2apps/<slot>_<name>`), leftovers of
+/// older versions included, found with the scan: the app learns its own slot from a probe file it writes, deletes
+/// what has its prefix and scans again until a scan finds none (one scan sees 96 files at most). Not the app's
+/// `save` blob. Drive it with `step()` between events (the app waits 0 meanwhile) until it returns `Some`.
+pub struct Clean<'a> {
+    st: Storage<'a>,
+    api: &'a Api,
+    round: u8,
+    found: u16,
+    /// files deleted so far
+    pub deleted: u16,
+    started: bool,
+}
+
+/// How a clean ended.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Cleaned {
+    /// all gone: this many files
+    Done(u16),
+    /// the scan never reached the app's files (the storage holds more than it lists); this many deleted
+    Partial(u16),
+    /// the loader has no storage service, or a call failed
+    Failed(i32),
+}
+
+const PROBE: &str = "clean_probe";
+
+/// `name` of a FILE-service path `…/wp2apps/<slot hex>_<name>`.
+fn file_name(path: &str) -> Option<&str> {
+    let rest = &path[path.rfind("/wp2apps/")? + 9..];
+    let b = rest.as_bytes();
+    (b.len() > 2 && b[0].is_ascii_hexdigit() && b[1] == b'_' && !rest[2..].contains('/')).then(|| &rest[2..])
+}
+
+impl<'a> Clean<'a> {
+    pub fn new(api: &'a Api) -> Result<Self, i32> {
+        let st = Storage::open(api)?;
+        let rc = api.file_write(PROBE, b"1", false);
+        if rc < 0 {
+            return Err(rc);
+        }
+        Ok(Clean { st, api, round: 0, found: 0, deleted: 0, started: false })
+    }
+
+    /// One scan step (or, at a scan's end, the deletes); `Some` when finished.
+    pub fn step(&mut self) -> Option<Cleaned> {
+        if !self.started {
+            if let Err(e) = self.st.begin_scan() {
+                return Some(self.finish(Cleaned::Failed(e)));
+            }
+            self.started = true;
+            self.found = 0;
+        }
+        let p = match self.st.scan_step() {
+            Ok(p) => p,
+            Err(e) => return Some(self.finish(Cleaned::Failed(e))),
+        };
+        if !p.complete {
+            return None;
+        }
+        // the scan is done: this app's prefix from the probe; if the probe is past what the scan lists, every
+        // FILE-service name it lists (a delete only ever reaches this app's own file of that name: the loader puts
+        // the running app's slot in front, so another app's files can't be touched)
+        let mut prefix = [0u8; PATH_BYTES];
+        let mut plen = 0;
+        for i in 0..p.files {
+            let Ok(f) = self.st.file(i) else { continue };
+            if let Some(dir) = f.path().strip_suffix(PROBE) {
+                prefix[..dir.len()].copy_from_slice(dir.as_bytes());
+                plen = dir.len();
+                break;
+            }
+        }
+        let mut gone = 0u16;
+        for i in 0..p.files {
+            let Ok(f) = self.st.file(i) else { continue };
+            let name = if plen > 0 {
+                f.path().as_bytes().strip_prefix(&prefix[..plen]).and_then(|n| core::str::from_utf8(n).ok())
+            } else {
+                file_name(f.path())
+            };
+            let Some(name) = name else { continue };
+            if name.is_empty() || name == PROBE {
+                continue;
+            }
+            if self.api.file_delete(name) >= 0 {
+                gone += 1;
+            }
+        }
+        self.deleted += gone;
+        self.round += 1;
+        // a full scan, or nothing more to find: done; else scan again (the deletes made room in the listing)
+        if !p.partial || gone == 0 || self.round >= 40 {
+            let r = if p.partial && (gone > 0 || plen == 0) { Cleaned::Partial(self.deleted) } else { Cleaned::Done(self.deleted) };
+            return Some(self.finish(r));
+        }
+        self.started = false;
+        None
+    }
+
+    fn finish(&mut self, r: Cleaned) -> Cleaned {
+        let _ = self.st.cancel_scan();
+        let _ = self.api.file_delete(PROBE);
+        r
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -329,4 +436,14 @@ mod tests {
         let api = crate::tests::table(crate::ABI, 1);
         assert!(matches!(Storage::open(api), Err(UNSUPPORTED)));
     }
+    #[test]
+    fn file_service_names() {
+        assert_eq!(file_name("/NAND:/wp2apps/3_v1_2_7"), Some("v1_2_7"));
+        assert_eq!(file_name("/NAND:/wp2apps/A_idx"), Some("idx"));
+        // packages, data blobs, other folders: not FILE-service files
+        assert_eq!(file_name("/NAND:/wp2apps/3.pkg"), None);
+        assert_eq!(file_name("/NAND:/other/3_x"), None);
+        assert_eq!(file_name("/NAND:/wp2apps/3_"), None);
+    }
+
 }

@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["cmf-wp2-app", "cmf-wp2-ui", "examples/hello", "examples/vibration-lab", "examples/motor-hog", "examples/motor-hold", "examples/agent-glow", "examples/api-demo", "examples/herdr-agents", "examples/kit-gallery", "examples/ui-gallery", "examples/lv-demo", "examples/back-owner", "examples/hr-probe", "examples/gps-probe", "examples/wake-probe", "examples/widget-columns", "examples/bitmap-gallery", "examples/bitmap-stream", "examples/bitmap-lv"]
+members = ["cmf-wp2-app", "cmf-wp2-ui", "examples/hello", "examples/vibration-lab", "examples/motor-hog", "examples/motor-hold", "examples/agent-glow", "examples/api-demo", "examples/herdr-agents", "examples/kit-gallery", "examples/ui-gallery", "examples/lv-demo", "examples/back-owner", "examples/hr-probe", "examples/gps-probe", "examples/wake-probe", "examples/widget-columns", "examples/bitmap-gallery", "examples/bitmap-stream", "examples/bitmap-lv", "examples/keyboards"]
 
 [workspace.package]
 edition = "2024"

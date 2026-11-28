@@ -38,6 +38,11 @@ pub fn slot_path(slot: u8, tmp: bool) -> [u8; 24] {
     file_path(slot, if tmp { b"tmp" } else { b"pkg" })
 }
 
+// which app the slot's named files (FILE: N_<name>) belong to: its package name (the loader's owner.rs)
+pub fn owner_path(slot: u8) -> [u8; 24] {
+    file_path(slot, b"own")
+}
+
 // the app's data file (docs/abi-1.1.md, Storage): N.dat, and N.new while a save is in flight
 pub fn data_path(slot: u8, new: bool) -> [u8; 24] {
     file_path(slot, if new { b"new" } else { b"dat" })

@@ -1,6 +1,6 @@
 """GPS for apps (docs/abi-1.4.md, "GPS"): gps-probe asks for it, the loader sets ux2sys 0x63 to 1, the emulator's
 GPS model sends NMEA for a synthetic position (`g 1 lat_e6 lon_e6`) and the app gets GPS events and fixes; a request
-off, pause, a crash and exit turn the GPS off again; a GPS the stock already runs is read and left on.
+off, a crash and exit turn the GPS off again (a pause keeps it, as the stock workouts do); a GPS the stock already runs is read and left on.
 Needs target/{loader,gps-probe}.wp2app."""
 import struct
 import unittest
@@ -92,12 +92,14 @@ class GpsTest(unittest.TestCase):
             tap_row(emu, 0)
             emu.sleep(3)
             self.assertEqual(self.mode(emu), 1)
+            mark = len(emu.uart())
             harness.popup(emu)  # PAUSE
             emu.sleep(2)
-            self.assertEqual(self.mode(emu), 0, "off while paused")
+            self.assertEqual(self.mode(emu), 1, "held while paused, as the stock workouts do")
             harness.close_popup(emu)  # RESUME
             emu.sleep(2)
-            self.assertEqual(self.mode(emu), 1, "on again after resume")
+            self.assertEqual(self.mode(emu), 1, "on after resume")
+            self.assertNotIn("enable[1]", "".join(self.gps_lines(emu, mark)), "never restarted: the fix is kept")
             uart = emu.uart()
             self.assertNotIn("ZEPHYR FATAL ERROR", uart)
             self.assertEqual(uart.count("*** Booting Zephyr"), 1, "guest rebooted")

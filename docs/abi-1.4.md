@@ -191,14 +191,13 @@ SDK: `Api::gps(&self, on: bool) -> i32`, `Api::gps_fix(&self) -> Option<GpsFix>`
   kept. An app derives speed and course from successive fixes (`gps-probe` does speed). `None` while the app has not
   asked for the GPS, and on an older loader.
 - `gps(false)` turns it off and queues one GPS event with `x` 0. Returns 0, or `-22` on an older loader.
-- The loader turns the GPS off (mode 0) on exit, crash, force stop, view delete and `PAUSE`, and on again on
-  `RESUME`. A new launch starts with it off. One start per hold, one stop at its end (`wp2_core::gps::Hold`, the
+- The loader turns the GPS off (mode 0) on exit, crash, force stop and view delete. Since loader 7 a `PAUSE` (a
+  popup over the app) keeps it on, as the stock workouts do: a restart would lose the fix. A new launch starts with it off. One start per hold, one stop at its end (`wp2_core::gps::Hold`, the
   heart rate's rule).
 - **A GPS the stock already runs is only read.** The stock keeps no request count for the GPS: one mode, and any
   `0` powers the receiver down (`docs/recon.md`, "GPS", Ownership). If the mode in force (`0x380443F5`) is non-zero
   when the app asks, the loader never writes `0x63` for that hold, so an app cannot cut a stock workout's GPS. In
-  the other direction a stock workout cannot start while the app is in the foreground; on `PAUSE` the loader has
-  already turned its own GPS off.
+  the other direction a stock workout cannot start while the app is in the foreground.
 
 ### Wire format
 
@@ -447,3 +446,91 @@ which is exactly the SDK's fallback trigger.
 LVGL apps do not use this record: their screen replaces the framebuffer, so they show bitmaps
 with an `IMAGE_SRC` batch record instead (abi-1.2.md, "Command records"). Formats, budgets and
 the streaming receiver: docs/bitmap-assets.md.
+
+## Files (loader of 2026-11-21, no ABI bump)
+
+An app's own files on NAND, for data bigger than the 4 KiB `Api::save` blob (offline map tiles, a photo gallery).
+Loader only: a FILE record on `lv_submit`. An older loader answers `-22` (op `0x16` is unknown there).
+
+SDK: `Api::file_read(name, skip, buf)`, `Api::file_write(name, data, append)`, `Api::file_delete(name)`,
+`storage::Clean` (deletes every file the app keeps, leftovers of older versions included).
+
+- Names: 1..=`FILE_NAME_MAX` (20) of `[a-z0-9_.]`, not starting with a dot. The loader stores them as
+  `/NAND:/wp2apps/<slot>_<name>`, so an app only sees its own files.
+- The files belong to the app, not the slot: `<slot>.own` holds the package name of the app that has them
+  (`fw/wp2-loader/src/owner.rs`). When an app starts, and when the menu lists it, a marker with another name means
+  another app had the slot: its files are deleted and the marker rewritten. The same name (an update) keeps them; no
+  marker (files from before markers) makes them this app's. When the menu lists the apps, a slot with a marker and
+  no app (removed) loses its files and the marker. The stub's DELETE is unchanged.
+- `file_write` takes at most `FILE_CHUNK` bytes and writes NAND synchronously; append more for a bigger file.
+- The file a read leaves open is closed before a write and when the app ends.
+
+Wire format: FILE record `[0x16, 0, 0, 0, cmd, name_len, name…, rest…]`, alone in a batch, in the app block. `cmd` 1
+read, `rest` = `ptr u32, cap u32` (LE, a buffer in the app block) → bytes read; 2 write (replaces), 3 append, `rest`
+= the data → bytes written; 4 delete; 5 the emoji font (below).
+
+## Emoji (loader 6, no ABI bump)
+
+`Api::emoji_read(skip, buf)` reads the stock emoji font `/NAND:C/emoji28.font` (read-only: the 52 emoji the stock
+notifications draw) from byte `skip`. FILE `cmd` 5 with the name `emoji`; `-22` on an older loader.
+`cmf_wp2_ui` draws them in text and offers an emoji keyboard.
+
+## Audio (loader of 2026-11-21, no ABI bump)
+
+The speaker, as the stock factory speaker test drives it (`audio_track_*`, addresses in `wp2_core::stock`). Loader
+only: an AUDIO record on `lv_submit`. An older loader answers `-22` (op `0x18` cmd 1..=5 unknown there).
+
+SDK: `Api::audio_open(rate_khz)`, `audio_write(pcm)`, `audio_volume(percent)`, `audio_queued()`, `audio_close()`;
+`cmf_wp2_app::adpcm` for a compressed stream from the host.
+
+- 16-bit mono PCM at 8, 16, 24, 32 or 48 kHz. `audio_write` returns the bytes taken: 0 when the loader's 6 KiB queue
+  is full (try again shortly), `-107` when not open, `-12` when the speaker could not be opened (or the queue could
+  not be had: it comes from the RES heap at the first `audio_open` and goes back when the app ends), `-22` for a buffer
+  outside the app block or an odd length. `pcm` must be a `static`.
+- `audio_volume` is 0..=100 % of the watch's maximum (0 mutes); until the first call the system level is used.
+  **On a real watch the stock track level is all or nothing** (2026-11-21): set 100 and scale the samples in the
+  app (squared, so the crown's steps sound even). See [speaker-tuning.md](speaker-tuning.md).
+- Plays only while the app runs in the foreground. A pause (call, alarm, notification) stops the sound and drops
+  the queue, `RESUME` opens it again; exit, crash and force stop close it. While it plays the panel stays lit.
+
+Wire format: `[0x18, n, 0, 0, cmd, …]`, alone in a batch: 1 OPEN `[rate_khz]`, 2 WRITE `[ptr u32, len u32]`, 3 CLOSE,
+4 VOLUME `[percent]`, 5 STATE → bytes still queued. The simulator (64-bit) sends WRITE/READ pointers as `u64`
+(`n` = 13).
+
+## Mic (loader 6, no ABI bump)
+
+The mic, as the stock factory mic test drives it (`audio_record`, addresses in `wp2_core::stock`). Same AUDIO record.
+
+SDK: `Api::mic_open()`, `Api::mic_read(pcm)`, `Api::mic_close()`; `cmf_wp2_app::mic::Voice` for speech (measures
+whether the stream is 1 or 2 channels, downsamples to 8 kHz, automatic gain: the real watch's mic is quiet).
+
+- 16 kHz 16-bit PCM, collected by the loader (256 ms of it) while the app runs in the foreground. **A real watch
+  gives two channels** (about 63,000 B/s, 2026-11-26; the emulator gives mono, 32,000 B/s) and speech is quiet (peaks
+  ~3,500-4,500, noise ~50 RMS): `mic::Voice` keeps channel 0 and applies a gain (target peak 22,000, at most x12). `mic_read` returns
+  the bytes taken (0: none yet) or `-12` when the mic could not be opened. `pcm` must be a `static`.
+- A pause stops it, `RESUME` starts it again; exit, crash and force stop end it. While it records the panel stays lit.
+- Privacy: an app records only while the user asked it to (a held button, a dictation screen) and sends audio only to
+  its own host.
+
+Wire format: AUDIO `cmd` 6 MIC OPEN, 7 MIC READ `[ptr u32, len u32]`, 8 MIC CLOSE.
+
+## Status bar (loader 7, no ABI bump)
+
+The loader draws a top line over every app, as the stock workouts do: the time (12-hour, once the phone set the
+clock) and, while the app holds the GPS, its strength in three bars. LVGL objects over the app's image or LVGL root
+(`fw/wp2-loader/src/status.rs`): the app's pixels are never touched and touches go through. It sits centred at
+y = 4, about 72 px wide; apps keep their titles clear of it. Refreshed every 500 ms. A pause no longer drops the
+app's GPS hold (the bars come back on `RESUME`).
+
+### Hiding it (loader of 2026-11-28, no ABI bump)
+
+A screen that needs the top of the panel (the rotary keyboard's top letter sits under the clock) hides the bar and
+shows it again: `Api::status_bar(on: bool) -> i32`, `0`, or `-22` on an older loader (op 0x1C unknown there:
+`Malformed`). A STATUS record alone in an `lv_submit` batch, like SENSOR:
+
+```text
+[0x1C, 1, 0, 0, on u8]   on: 0 hidden, 1 shown
+```
+
+The call only records the wish (`status::SHOWN`); the UI thread hides or shows the label and the bars on its next
+tick, so a canvas app needs no LVGL. Every launch starts with the bar shown (`app::launch`).

@@ -46,6 +46,7 @@ def decrypt(key: bytes, data: bytes) -> bytes:
 
 STUB_INFO = 0x90A0  # install.INFO, answered by the stub only with a bound session
 STUB_EVENT = 0xB0A6  # app -> host frames, unsolicited (docs/abi-1.1.md)
+PING_REPLY = 0x90A7 | 0xA000  # the stub's answer to a PING (channel.ping)
 
 
 def frame(c1: int, c2: int, payload: bytes, key: bytes | None) -> bytes:
@@ -96,6 +97,9 @@ class Session:
         self.gatt = None
         self.key = None
         self.frames = asyncio.Queue()
+        # PING replies on their own: a keep-alive PING and a stream of messages in flight (channel.Pipe) don't take
+        # each other's replies
+        self.pings = asyncio.Queue()
         self.events = asyncio.Queue(maxsize=256)
         self.shell = asyncio.Queue()
         self.parser = Parser()
@@ -109,7 +113,9 @@ class Session:
         await asyncio.sleep(0.6)
 
     def _route(self, f) -> None:
-        if f[:2] != (SYSTEM, STUB_EVENT):
+        if f[:2] == (SYSTEM, PING_REPLY):
+            self.pings.put_nowait(f)
+        elif f[:2] != (SYSTEM, STUB_EVENT):
             self.frames.put_nowait(f)
         elif not self.events.full():  # a host that never reads them drops the oldest ones' successors
             self.events.put_nowait(f[2])
@@ -143,9 +149,10 @@ class Session:
         key = key or self.key
         await self.gatt.write(CMD_W, frame(SYSTEM, c2, payload, key), response=False)
         # on a shared link (iOS) the notifications carry other hosts' frames too: skip what this key cannot open
+        q = self.pings if expect == PING_REPLY else self.frames
         async with asyncio.timeout(timeout):
             while True:
-                got_c1, got, body = await self.frames.get()
+                got_c1, got, body = await q.get()
                 if got_c1 == SYSTEM and got == expect:
                     try:
                         return decrypt(key, body)

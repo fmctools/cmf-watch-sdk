@@ -150,6 +150,11 @@ pub extern "C" fn submit(buf: *const u8, len: usize) -> i32 {
     if !lvcmd::image_src_in(sl, block as u32, size as u32) {
         return E_ARG;
     }
+    // STATUS: the bar's objects are the UI thread's; it reads the wish on its tick (status.rs)
+    if let Some(on) = lvcmd::status_bar(sl) {
+        crate::status::SHOWN.store(on, Ordering::Release);
+        return 0;
+    }
     // SENSOR (heart rate, GPS) needs no LVGL: a canvas app sends it too, and it must not make the root
     if let Some((sensor, on)) = lvcmd::sensor(sl) {
         if sensor == wp2_core::gps::SENSOR_GPS {
@@ -164,12 +169,19 @@ pub extern "C" fn submit(buf: *const u8, len: usize) -> i32 {
     if lvcmd::page_query(unsafe { core::slice::from_raw_parts(buf, len) }) {
         return crate::app::ON_PAGE.load(Ordering::Acquire) as i32;
     }
+    if let Some(cmd) = lvcmd::file(unsafe { core::slice::from_raw_parts(buf, len) }) {
+        return crate::svc::file(cmd, (buf as *mut u8, len));
+    }
     if let Some(rec) = lvcmd::widget(unsafe { core::slice::from_raw_parts(buf, len) }) {
         // a v2 record the running stub cannot draw (or a malformed one): -22, so the app falls back to v1
         if !wp2_core::widget::accepts(rec, wp2_core::layout::stub_ram().version()) {
             return -22;
         }
         return crate::svc::save_widget(rec);
+    }
+    // AUDIO needs no LVGL either; its stock calls run on the UI tick (audio.rs)
+    if let Some(cmd) = lvcmd::audio(unsafe { core::slice::from_raw_parts(buf, len) }) {
+        return crate::audio::request(cmd);
     }
     if let Some(cmd) = lvcmd::media_key(unsafe { core::slice::from_raw_parts(buf, len) }) {
         return crate::media::key(cmd);
@@ -245,6 +257,8 @@ fn make_root() {
     }
     st().objs[0] = root;
     st().events[0] = KNOB_CB;
+    // the status bar on the root now: the image hides
+    crate::status::attach(root);
     // the image hides, the root takes the knob
     ui::show(true);
 }
@@ -661,10 +675,13 @@ pub fn teardown() {
     s.focus = 0; // before the delete, as in DEL
     crate::music::close();
     if !s.objs[0].is_null() {
+        // the status bar back on the image first, then the root with all of the app's objects
+        crate::status::attach(ui::image());
         // children first, scroll bars after their targets (created later)
         stock!(LV_OBJ_DEL, fn(Obj))(s.objs[0]);
     }
     crate::music::free();
+    crate::media::release();
     for slot in 0..MAX_FONTS as usize {
         if s.fonts_open >> slot & 1 != 0 {
             stock!(LVGL_BITMAP_FONT_CLOSE, fn(*mut u32))(s.fonts[slot].as_mut_ptr());

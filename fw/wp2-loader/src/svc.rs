@@ -53,6 +53,7 @@ pub fn start(slot: u8, abi_minor: u8) {
 
 // UI thread, app thread aborted
 pub fn stop() {
+    file_close();
     KEEP_ON.store(false, Ordering::Relaxed);
     wake(false);
     if channel() {
@@ -216,6 +217,16 @@ pub extern "C" fn load(buf: *mut u8, cap: usize) -> i32 {
     if bad { E_IO } else { 0 }
 }
 
+/// The wall clock's hour and minute, None till the phone set it (the status bar).
+pub fn clock() -> Option<(u8, u8)> {
+    if unsafe { ((RTC_APP + 4) as *const u32).read_volatile() } == 0 {
+        return None;
+    }
+    let mut raw = [0u8; 16];
+    stock!(RTC_GET_TIME, fn(*mut u8))(raw.as_mut_ptr());
+    Some((raw[2], raw[1]))
+}
+
 pub extern "C" fn time(out: *mut Time) -> i32 {
     if out.is_null() || unsafe { ((RTC_APP + 4) as *const u32).read_volatile() } == 0 {
         return E_IO;
@@ -252,4 +263,107 @@ pub extern "C" fn battery() -> i32 {
 pub extern "C" fn keep_screen_on(on: bool) -> i32 {
     KEEP_ON.store(on, Ordering::Relaxed);
     0
+}
+
+struct Reader {
+    f: fs::File,
+    path: [u8; 48],
+    pos: usize,
+    open: bool,
+}
+
+static mut READER: Reader = Reader { f: [0; 0x2C], path: [0; 48], pos: 0, open: false };
+
+/// Closes the file a FILE read left open: before a write, and when the app ends.
+pub fn file_close() {
+    let rd = unsafe { &mut *core::ptr::addr_of_mut!(READER) };
+    if rd.open {
+        fs::close(&mut rd.f);
+        rd.open = false;
+    }
+}
+
+/// App thread (lv_submit FILE, wp2-core lvcmd::file): `/NAND:/wp2apps/<slot>_<name>`. A read lands in the batch
+/// buffer (`batch`). NAND is written synchronously, like `save`.
+pub fn file(cmd: wp2_core::lvcmd::FileCmd, batch: (*mut u8, usize)) -> i32 {
+    use wp2_core::lvcmd::FileCmd;
+    let Some(slot) = slot() else { return E_RANGE };
+    let name = match cmd {
+        FileCmd::Read { name, .. } | FileCmd::Write { name, .. } | FileCmd::Delete { name } => name,
+        FileCmd::Emoji { .. } => b"emoji",
+    };
+    // "/NAND:/wp2apps/" + slot hex + "_" + name + NUL
+    let mut path = [0u8; 48];
+    let dir = &wp2_core::layout::DIR[..wp2_core::layout::DIR.len() - 1];
+    path[..dir.len()].copy_from_slice(dir);
+    let mut n = dir.len();
+    path[n] = b'/';
+    path[n + 1] = b"0123456789ABCDEF"[usize::from(slot & 15)];
+    path[n + 2] = b'_';
+    n += 3;
+    path[n..n + name.len()].copy_from_slice(name);
+    if matches!(cmd, FileCmd::Emoji { .. }) {
+        // the stock's own emoji, read in place: nothing is copied or written
+        const EMOJI: &[u8] = b"/NAND:C/emoji28.font";
+        path = [0; 48];
+        path[..EMOJI.len()].copy_from_slice(EMOJI);
+    }
+    let mut f: fs::File = [0; 0x2C];
+    if !matches!(cmd, FileCmd::Read { .. } | FileCmd::Emoji { .. }) {
+        file_close();
+    }
+    match cmd {
+        FileCmd::Read { skip, .. } | FileCmd::Emoji { skip } => {
+            // the batch buffer itself takes the bytes (lv::submit checked it lies in the app block)
+            let out = unsafe { core::slice::from_raw_parts_mut(batch.0, batch.1) };
+            let rd = unsafe { &mut *core::ptr::addr_of_mut!(READER) };
+            // the stock fs table has no seek: the last file read stays open, so chunk after chunk is linear
+            if !(rd.open && rd.path == path && rd.pos == skip as usize) {
+                if rd.open {
+                    fs::close(&mut rd.f);
+                }
+                rd.open = false;
+                let rc = fs::open(&mut rd.f, &path, fs::READ);
+                if rc < 0 {
+                    return rc;
+                }
+                rd.open = true;
+                rd.path = path;
+                rd.pos = 0;
+                let mut left = skip as usize;
+                while left > 0 {
+                    let k = left.min(out.len());
+                    let r = fs::read(&mut rd.f, &mut out[..k]);
+                    if r <= 0 {
+                        return 0;
+                    }
+                    left -= r as usize;
+                    rd.pos += r as usize;
+                }
+            }
+            let mut got = 0;
+            while got < out.len() {
+                let r = fs::read(&mut rd.f, &mut out[got..]);
+                if r <= 0 {
+                    break;
+                }
+                got += r as usize;
+            }
+            rd.pos += got;
+            got as i32
+        }
+        FileCmd::Write { data, append, .. } => {
+            if !append {
+                fs::unlink(&path);
+            }
+            let rc = fs::open(&mut f, &path, fs::WRITE | fs::CREATE | if append { fs::APPEND } else { 0 });
+            if rc < 0 {
+                return rc;
+            }
+            let w = fs::write(&mut f, data);
+            fs::close(&mut f);
+            w
+        }
+        FileCmd::Delete { .. } => fs::unlink(&path),
+    }
 }

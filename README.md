@@ -14,6 +14,7 @@ Status: proven in the emulator. On a real watch: the stub firmware (OTA), the 1.
 - Publishing an app to the FMC store: [cmf-tech-community/apps](https://github.com/cmf-tech-community/apps), built
   with this SDK; the apps in `sdk/examples/` are the SDK's tests and demos
 - App ABI 1.1 (host messages, storage, time, battery, screen on): [docs/abi-1.1.md](docs/abi-1.1.md)
+- Keyboards and voice typing for any app: [docs/keyboards.md](docs/keyboards.md)
 - App ABI 1.2 (LVGL apps: command buffers, stock widgets and fonts, events, budgets): [docs/abi-1.2.md](docs/abi-1.2.md)
 - herdr agents on the watch (example app + Mac daemon): [docs/herdr-agents.md](docs/herdr-agents.md)
 - Plan, part 1: [docs/plans/2026-11-10-wp2-app-loader-foundations.md](docs/plans/2026-11-10-wp2-app-loader-foundations.md)
