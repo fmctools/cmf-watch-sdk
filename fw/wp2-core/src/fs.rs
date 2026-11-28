@@ -7,6 +7,8 @@ pub type File = [u8; 0x2C];
 pub const READ: u8 = 1;
 pub const WRITE: u8 = 2;
 pub const CREATE: u8 = 0x10;
+/// Zephyr FS_O_APPEND: every write goes to the end.
+pub const APPEND: u8 = 0x20;
 const ENOTSUP: i32 = -134;
 
 fn terminated(path: &[u8]) -> bool {

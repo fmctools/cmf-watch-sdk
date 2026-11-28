@@ -88,7 +88,12 @@ pub fn layout(data: *mut c_void, input: Cb, tick: Cb) -> Obj {
     // 10 ms: at 20 ms, 4-10 % of agent-glow's presents (33 ms frames) were merged into the next flush
     u.timer = stock!(LV_TIMER_CREATE, fn(Cb, u32, *mut c_void) -> *mut c_void)(tick, 10, null_mut());
     (u.scr, u.input) = (scr, Some(input));
+    crate::status::attach(u.img);
     scr
+}
+
+pub fn image() -> Obj {
+    ui().img
 }
 
 pub fn screen() -> Obj {
@@ -129,6 +134,7 @@ pub fn delete() {
     if !u.img.is_null() {
         stock!(LV_OBJ_DEL, fn(Obj))(u.img);
     }
+    crate::status::detach();
     unsafe { heap::free(FB, u.fb) };
     u.fb = null_mut();
     u.scr = null_mut();

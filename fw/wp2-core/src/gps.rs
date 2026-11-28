@@ -18,20 +18,55 @@ pub const FIX_LEN: usize = 20;
 /// Stock info block (0x38016C40, written by the NMEA parser 0x10197D40 on gps_service) to the app's fix. `ms`: the
 /// loader's clock when it was read. Degrees are f64 in the block; the app gets 1e-7 degrees.
 pub fn fix(raw: &[u8; RAW_LEN], ms: u32) -> [u8; FIX_LEN] {
-    let f64_at = |o: usize| f64::from_le_bytes(raw[o..o + 8].try_into().unwrap());
+    let u64_at = |o: usize| u64::from_le_bytes(raw[o..o + 8].try_into().unwrap());
     let u32_at = |o: usize| u32::from_le_bytes(raw[o..o + 4].try_into().unwrap());
-    // rounded (core has no f64::round); `as` saturates, NaN gives 0
-    let e7 = |deg: f64| (deg * 1e7 + if deg < 0.0 { -0.5 } else { 0.5 }) as i32;
-    let alt_m = f32::from_bits(u32_at(0x48));
     let mut out = [0u8; FIX_LEN];
-    out[0..4].copy_from_slice(&e7(f64_at(0x38)).to_le_bytes());
-    out[4..8].copy_from_slice(&e7(f64_at(0x40)).to_le_bytes());
-    out[8..12].copy_from_slice(&((alt_m * 10.0 + if alt_m < 0.0 { -0.5 } else { 0.5 }) as i32).to_le_bytes());
+    out[0..4].copy_from_slice(&f64_scaled(u64_at(0x38), 10_000_000).to_le_bytes());
+    out[4..8].copy_from_slice(&f64_scaled(u64_at(0x40), 10_000_000).to_le_bytes());
+    out[8..12].copy_from_slice(&f32_scaled(u32_at(0x48), 10).to_le_bytes());
     out[12..16].copy_from_slice(&ms.to_le_bytes());
     out[16] = u32_at(0x4C).min(255) as u8; // GGA fix quality, 0 = no fix
     out[17] = u32_at(0x50).min(255) as u8; // satellites in use
     out[18..20].copy_from_slice(&(u32_at(0x54).min(0xFFFF) as u16).to_le_bytes());
     out
+}
+
+// The block's floats × a scale, rounded half away from zero, saturating, NaN 0, in integers only: the loader is
+// soft-float, and f64 arithmetic pulled ~2 KiB of compiler-builtins into its 64 KiB.
+
+/// An f64's bits × `scale`, rounded.
+pub fn f64_scaled(bits: u64, scale: u32) -> i32 {
+    let exp = ((bits >> 52) & 0x7FF) as i32;
+    let frac = bits & ((1 << 52) - 1);
+    scaled(bits >> 63 != 0, exp, frac | 1 << 52, 1075, frac, 0x7FF, scale)
+}
+
+/// An f32's bits × `scale`, rounded.
+pub fn f32_scaled(bits: u32, scale: u32) -> i32 {
+    let exp = ((bits >> 23) & 0xFF) as i32;
+    let frac = u64::from(bits & ((1 << 23) - 1));
+    scaled(bits >> 31 != 0, exp, frac | 1 << 23, 150, frac, 0xFF, scale)
+}
+
+/// value = m · 2^(exp − bias); exp 0 is zero or subnormal (far below 1 / scale: 0), exp `max` infinity or NaN.
+fn scaled(neg: bool, exp: i32, m: u64, bias: i32, frac: u64, max: i32, scale: u32) -> i32 {
+    if exp == 0 || (exp == max && frac != 0) {
+        return 0;
+    }
+    let sat = if neg { i32::MIN } else { i32::MAX };
+    if exp == max || exp >= bias {
+        // infinite, or at least 2^(mantissa bits): beyond any i32 once scaled
+        return sat;
+    }
+    let p = u128::from(m) * u128::from(scale);
+    let shift = (bias - exp) as u32;
+    let q = if shift >= 127 { 0 } else { (p + (1u128 << (shift - 1))) >> shift };
+    match (neg, q) {
+        (false, q) if q > i32::MAX as u128 => i32::MAX,
+        (true, q) if q > 1u128 << 31 => i32::MIN,
+        (false, q) => q as i32,
+        (true, q) => (q as i64).wrapping_neg() as i32,
+    }
 }
 
 /// GPS event: `x` = fix quality (0 = none), `y` = satellites in use. The values come with `Api::gps_fix`.
@@ -63,6 +98,32 @@ mod tests {
         assert_eq!(u32::from_le_bytes(f[12..16].try_into().unwrap()), 5000);
         assert_eq!((f[16], f[17], u16::from_le_bytes([f[18], f[19]])), (1, 8, 31));
         assert_eq!(event(&f), Event { kind: GPS, x: 1, y: 8, ..Event::default() });
+    }
+
+    #[test]
+    fn integer_scaling_matches_the_float_maths() {
+        let f = |v: f64| (v * 1e7 + if v < 0.0 { -0.5 } else { 0.5 }) as i32;
+        let g = |v: f32| (v * 10.0 + if v < 0.0 { -0.5 } else { 0.5 }) as i32;
+        // (exact half-way values, 0.5e-7 apart, can differ by one: the float sum rounds first; this is exact)
+        assert_eq!(f64_scaled(0.00000005f64.to_bits(), 10_000_000), 0);
+        for v in [0.0, -0.0, 6.9271, 79.8612, -33.8688197, 151.2092955, 89.9999999, -179.9999999, 1e-9, -1e-9,
+                  214.7483647, 214.7483648, -214.7483648, -300.0, 1e300,
+                  f64::INFINITY, f64::NEG_INFINITY, f64::NAN, f64::MIN_POSITIVE / 2.0] {
+            assert_eq!(f64_scaled(v.to_bits(), 10_000_000), f(v), "{v}");
+        }
+        for v in [0.0f32, 123.4, -12.0, 8848.86, -430.5, 0.05, -0.05, 0.04, 3.0e9, f32::NAN, f32::INFINITY] {
+            assert_eq!(f32_scaled(v.to_bits(), 10), g(v), "{v}");
+        }
+        // a sweep of coordinates
+        let mut x = 0x1234_5678u32;
+        for _ in 0..20_000 {
+            x ^= x << 13;
+            x ^= x >> 17;
+            x ^= x << 5;
+            let v = (f64::from(x) / f64::from(u32::MAX) - 0.5) * 360.0;
+            let (a, b) = (f64_scaled(v.to_bits(), 10_000_000), f(v));
+            assert!((a - b).abs() <= 1, "{v}: {a} {b}");
+        }
     }
 
     #[test]

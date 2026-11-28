@@ -618,6 +618,42 @@ pub fn sensor(buf: &[u8]) -> Option<(u8, bool)> {
     }
 }
 
+/// FILE record (op 0x16, handle 0), alone in a batch: the app's own files on NAND, for data bigger than the 4 KiB
+/// blob (offline map tiles). `[0x16, 0, 0, 0, cmd, name_len, name…, rest…]`: cmd 1 read, rest = `ptr: u32, cap: u32`
+/// LE (a buffer in the app block) → bytes read; 2 write (replaces), 3 append, rest = the data → bytes written;
+/// 4 delete. Names: 1..=FILE_NAME_MAX of `[a-z0-9_.]`. On an older loader op 0x16 is `Malformed` (-22).
+#[derive(Debug, PartialEq)]
+pub enum FileCmd<'a> {
+    Read { name: &'a [u8], skip: u32 },
+    Write { name: &'a [u8], data: &'a [u8], append: bool },
+    Delete { name: &'a [u8] },
+    /// The stock emoji font (`/NAND:C/emoji28.font`, read-only: the 52 emoji the stock notifications draw), from
+    /// byte `skip`. Op 5 with the name `emoji`; an older loader refuses it (-22).
+    Emoji { skip: u32 },
+}
+
+pub const FILE_NAME_MAX: usize = 20;
+
+pub fn file(buf: &[u8]) -> Option<FileCmd<'_>> {
+    let [0x16, 0, 0, 0, cmd, n, rest @ ..] = buf else { return None };
+    let n = usize::from(*n);
+    if n == 0 || n > FILE_NAME_MAX || rest.len() < n {
+        return None;
+    }
+    let (name, rest) = rest.split_at(n);
+    if !name.iter().all(|c| matches!(c, b'a'..=b'z' | b'0'..=b'9' | b'_' | b'.')) || name[0] == b'.' {
+        return None;
+    }
+    let u = |i: usize| u32::from_le_bytes([rest[i], rest[i + 1], rest[i + 2], rest[i + 3]]);
+    match cmd {
+        1 if rest.len() >= 4 => Some(FileCmd::Read { name, skip: u(0) }),
+        2 | 3 => Some(FileCmd::Write { name, data: rest, append: *cmd == 3 }),
+        4 if rest.is_empty() => Some(FileCmd::Delete { name }),
+        5 if rest.len() >= 4 && name == b"emoji" => Some(FileCmd::Emoji { skip: u(0) }),
+        _ => None,
+    }
+}
+
 /// GPS_FIX record (op 0x18, handle 0, payload = `gps::FIX_LEN` bytes the loader overwrites with the latest fix),
 /// alone in a batch (docs/abi-1.4.md, "GPS"). On an older loader op 0x18 is `Malformed` (-22).
 pub fn gps_fix(buf: &[u8]) -> bool {
@@ -735,6 +771,113 @@ pub fn media_info(buf: &[u8; 0x82]) -> (&[u8], &[u8]) {
         }
     }
     (field(&buf[..0x40]), field(&buf[0x41..0x81]))
+}
+
+/// AUDIO record (op 0x18, handle 0), alone in a batch: the speaker (docs/abi-1.4.md, "Audio"). `[0x18, n, 0, 0,
+/// cmd, …]`: 1 OPEN `[rate_khz]` (8, 16, 24, 32 or 48; 16-bit mono PCM), 2 WRITE `[ptr u32, len u32]` (LE, a
+/// buffer in the app block; even len) → bytes taken, 3 CLOSE, 4 VOLUME `[percent]` (0..=100), 5 STATE → bytes
+/// still queued, or a negative error. On an older loader op 0x18 is `Malformed` (-22).
+#[derive(Debug, PartialEq)]
+pub enum AudioCmd {
+    Open { rate_khz: u8 },
+    Write { ptr: u32, len: u32 },
+    Close,
+    Volume { percent: u8 },
+    State,
+    /// The mic: 16 kHz mono 16-bit PCM while open (mic.rs).
+    MicOpen,
+    MicRead { ptr: u32, len: u32 },
+    MicClose,
+}
+
+pub const AUDIO_RATES_KHZ: [u8; 5] = [8, 16, 24, 32, 48];
+
+pub fn audio(buf: &[u8]) -> Option<AudioCmd> {
+    let u = |b: &[u8]| u32::from_le_bytes([b[0], b[1], b[2], b[3]]);
+    match *buf {
+        [0x18, 2, 0, 0, 1, rate_khz] if AUDIO_RATES_KHZ.contains(&rate_khz) => Some(AudioCmd::Open { rate_khz }),
+        [0x18, 9, 0, 0, 2, ref rest @ ..] if rest.len() == 8 && u(&rest[4..]) % 2 == 0 => {
+            Some(AudioCmd::Write { ptr: u(&rest[..4]), len: u(&rest[4..]) })
+        }
+        [0x18, 1, 0, 0, 3] => Some(AudioCmd::Close),
+        [0x18, 2, 0, 0, 4, percent @ 0..=100] => Some(AudioCmd::Volume { percent }),
+        [0x18, 1, 0, 0, 5] => Some(AudioCmd::State),
+        [0x18, 1, 0, 0, 6] => Some(AudioCmd::MicOpen),
+        [0x18, 9, 0, 0, 7, ref rest @ ..] if rest.len() == 8 => Some(AudioCmd::MicRead { ptr: u(&rest[..4]), len: u(&rest[4..]) }),
+        [0x18, 1, 0, 0, 8] => Some(AudioCmd::MicClose),
+        _ => None,
+    }
+}
+
+/// The stock volume level for `percent` of `max` (0 only for 0 %).
+pub fn audio_level(percent: u8, max: u8) -> u8 {
+    if percent == 0 || max == 0 {
+        return 0;
+    }
+    ((u32::from(percent.min(100)) * u32::from(max)).div_ceil(100)) as u8
+}
+
+#[cfg(test)]
+mod audio_tests {
+    use super::*;
+
+    #[test]
+    fn audio_records() {
+        assert_eq!(audio(&[0x18, 2, 0, 0, 1, 16]), Some(AudioCmd::Open { rate_khz: 16 }));
+        assert_eq!(audio(&[0x18, 2, 0, 0, 1, 11]), None, "11 kHz is not a DAC rate here");
+        let mut w = std::vec![0x18, 9, 0, 0, 2];
+        w.extend(0x3800_1000u32.to_le_bytes());
+        w.extend(640u32.to_le_bytes());
+        assert_eq!(audio(&w), Some(AudioCmd::Write { ptr: 0x3800_1000, len: 640 }));
+        w[9] = 1; // odd: half a sample
+        assert_eq!(audio(&w), None);
+        assert_eq!(audio(&[0x18, 1, 0, 0, 3]), Some(AudioCmd::Close));
+        assert_eq!(audio(&[0x18, 2, 0, 0, 4, 100]), Some(AudioCmd::Volume { percent: 100 }));
+        assert_eq!(audio(&[0x18, 2, 0, 0, 4, 101]), None);
+        assert_eq!(audio(&[0x18, 1, 0, 0, 5]), Some(AudioCmd::State));
+        assert_eq!(audio(&[0x18, 1, 0, 0, 6]), Some(AudioCmd::MicOpen));
+        assert_eq!(audio(&[0x18, 1, 0, 0, 8]), Some(AudioCmd::MicClose));
+        w[4] = 7;
+        assert_eq!(audio(&w), Some(AudioCmd::MicRead { ptr: 0x3800_1000, len: 0x201 }));
+        assert_eq!(audio(&[0x18, 1, 1, 0, 3]), None, "handle 0 only");
+        assert_eq!(audio(&[0x18, 1, 0, 0, 3, 0x02, 0, 1, 0]), None, "alone in its batch");
+        assert_eq!(validate(&[0x18, 1, 0, 0, 3], &Table::new(), 0), Err(Error::Malformed), "op 0x18 is not an LVGL record");
+    }
+
+    #[test]
+    fn audio_levels() {
+        assert_eq!(audio_level(0, 16), 0);
+        assert_eq!(audio_level(1, 16), 1, "never muted above 0 %");
+        assert_eq!(audio_level(50, 16), 8);
+        assert_eq!(audio_level(100, 16), 16);
+        assert_eq!(audio_level(100, 0), 0);
+    }
+}
+
+#[cfg(test)]
+mod file_tests {
+    use super::*;
+
+    #[test]
+    fn file_records() {
+        let mut r = std::vec![0x16, 0, 0, 0, 1, 3, b'a', b'_', b'1'];
+        r.extend(4096u32.to_le_bytes());
+        r.extend([0; 32]);
+        assert_eq!(file(&r), Some(FileCmd::Read { name: b"a_1", skip: 4096 }));
+        assert_eq!(file(&[0x16, 0, 0, 0, 3, 1, b't', 9, 9]), Some(FileCmd::Write { name: b"t", data: &[9, 9], append: true }));
+        assert_eq!(file(&[0x16, 0, 0, 0, 4, 2, b'm', b'p']), Some(FileCmd::Delete { name: b"mp" }));
+        let mut e = std::vec![0x16, 0, 0, 0, 5, 5];
+        e.extend_from_slice(b"emoji");
+        e.extend_from_slice(&16u32.to_le_bytes());
+        assert_eq!(file(&e), Some(FileCmd::Emoji { skip: 16 }));
+        e[6] = b'x';
+        assert_eq!(file(&e), None);
+        // no paths, no hidden names, no upper case, no empty names
+        assert_eq!(file(&[0x16, 0, 0, 0, 4, 2, b'.', b'.']), None);
+        assert_eq!(file(&[0x16, 0, 0, 0, 4, 3, b'a', b'/', b'b']), None);
+        assert_eq!(file(&[0x16, 0, 0, 0, 4, 1, b'A']), None);
+        assert_eq!(file(&[0x16, 0, 0, 0, 4, 0]), None);
+    }
 }
 
 #[cfg(test)]

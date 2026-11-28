@@ -57,6 +57,7 @@ pub fn scan() -> [Option<Entry>; ROWS] {
     use wp2_core::{fs, layout::slot_path};
     let mut found: [(Option<Entry>, *mut u8); ROWS] = [(None, core::ptr::null_mut()); ROWS];
     let mut n = 0;
+    let mut present = 0u16;
     let mut file: fs::File = [0; 0x2C];
     // a stub before 8 takes slots 0..7 only: 8.pkg..F.pkg left by a newer stub are not its apps
     for slot in 0..wp2_core::layout::stub_ram().slots() {
@@ -66,6 +67,8 @@ pub fn scan() -> [Option<Entry>; ROWS] {
         let mut raw = [0u8; HEADER_SIZE];
         let ok = fs::read_exact(&mut file, &mut raw);
         if let Some(mut e) = entry(slot, &raw).filter(|_| ok) {
+            present |= 1 << slot;
+            crate::owner::adopt(slot, &e.name);
             let mut desc = [0u8; wp2_core::pkg::ICON_DESC];
             if fs::read_exact(&mut file, &mut desc) {
                 let icon = lv::read_icon(&mut file, &desc, e.size);
@@ -83,6 +86,8 @@ pub fn scan() -> [Option<Entry>; ROWS] {
         }
         fs::close(&mut file);
     }
+    // the named files of apps since removed
+    crate::owner::sweep(present, wp2_core::layout::stub_ram().slots());
     let order = order();
     // ponytail: insertion sort, core's sort costs ~7 KiB of the 64 KiB loader region
     for i in 1..n {

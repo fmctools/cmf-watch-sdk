@@ -18,24 +18,28 @@ pub struct Msg {
     pub data: [u8; MSG_MAX],
 }
 
-// Single producer, single consumer. head/tail run free modulo 256; zeroed memory is an empty ring.
+// Single producer, single consumer. head/tail run free modulo 256 (N divides 256); zeroed memory is an empty ring.
 #[repr(C)]
-pub struct Ring {
+pub struct RingN<const N: usize> {
     head: AtomicU8,
     tail: AtomicU8,
-    msgs: UnsafeCell<[Msg; DEPTH as usize]>,
+    msgs: UnsafeCell<[Msg; N]>,
 }
 
-unsafe impl Sync for Ring {}
+/// The stub's inbox and outbox (StubRam layout: unchanged).
+pub type Ring = RingN<{ DEPTH as usize }>;
 
-impl Ring {
+unsafe impl<const N: usize> Sync for RingN<N> {}
+
+impl<const N: usize> RingN<N> {
     pub const fn new() -> Self {
         const EMPTY: Msg = Msg { len: 0, slot: 0, data: [0; MSG_MAX] };
-        Ring { head: AtomicU8::new(0), tail: AtomicU8::new(0), msgs: UnsafeCell::new([EMPTY; DEPTH as usize]) }
+        assert!(N > 0 && N < 256 && 256 % N == 0);
+        RingN { head: AtomicU8::new(0), tail: AtomicU8::new(0), msgs: UnsafeCell::new([EMPTY; N]) }
     }
 
     fn at(&self, i: u8) -> *mut Msg {
-        unsafe { (self.msgs.get() as *mut Msg).add(usize::from(i % DEPTH)) }
+        unsafe { (self.msgs.get() as *mut Msg).add(usize::from(i) % N) }
     }
 
     pub fn len(&self) -> u8 {
@@ -45,7 +49,7 @@ impl Ring {
     // producer
     pub fn push(&self, slot: u8, data: &[u8]) -> bool {
         let tail = self.tail.load(Ordering::Relaxed);
-        if data.is_empty() || data.len() > MSG_MAX || tail.wrapping_sub(self.head.load(Ordering::Acquire)) >= DEPTH {
+        if data.is_empty() || data.len() > MSG_MAX || usize::from(tail.wrapping_sub(self.head.load(Ordering::Acquire))) >= N {
             return false;
         }
         let m = unsafe { &mut *self.at(tail) };

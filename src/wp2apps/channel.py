@@ -68,6 +68,115 @@ async def send(session, data: bytes, slot: int = ANY, wait: float = 10.0) -> Non
         delay = min(delay * 2, 0.5)
 
 
+WINDOW = 4  # frames in flight: the watch drops a fifth one unanswered (emulator, docs/abi-1.4.md "Pipelining")
+
+
+class Pipe:
+    """Messages in order with up to WINDOW frames in flight, 3.7x the one-at-a-time `send` (emulator).
+
+    A refused frame (FULL, PAUSED) may be followed by accepted ones, which then sit in the inbox ahead of it: after
+    any refusal the pipe sends one at a time for `calm` messages, so order breaks at most there. Streams that
+    must survive that carry their own sequence numbers (the speaker's `a seq`, pixview's `D seq`)."""
+
+    def __init__(self, session, slot: int = ANY, window: int = WINDOW, calm: int = 32):
+        self.session, self.slot, self.window, self.calm = session, slot, window, calm
+        self.quiet = 0  # messages left to send one at a time
+        self.refused = 0
+
+    async def _replies(self, n: int, timeout: float) -> list[int]:
+        got = []
+        async with asyncio.timeout(timeout):
+            while len(got) < n:
+                c1, c2, body = await self.session.frames.get()
+                if c1 == SYSTEM and c2 == MSG | 0xA000:
+                    try:
+                        got.append(link.decrypt(self.session.key, body)[0])
+                    except ValueError:
+                        continue  # another host's frame on a shared link
+        return got
+
+    async def send(self, msgs: list[bytes], wait: float = 10.0) -> None:
+        loop = asyncio.get_running_loop()
+        i, delay, deadline = 0, 0.02, loop.time() + wait
+        while i < len(msgs):
+            n = 1 if self.quiet else self.window
+            batch = msgs[i:i + n]
+            for m in batch:
+                if not 1 <= len(m) <= MSG_MAX:
+                    raise ValueError(f"message must be 1..{MSG_MAX} bytes, got {len(m)}")
+                await self.session.gatt.write(link.CMD_W, link.frame(SYSTEM, MSG, bytes([self.slot]) + m,
+                                                                     self.session.key), response=False)
+            try:
+                got = await self._replies(len(batch), 3.0)
+            except TimeoutError:
+                got = []  # frames lost on the way: send the batch again, one at a time
+            ok = next((k for k, s in enumerate(got) if s != Status.OK), len(got))
+            i += ok
+            self.quiet = max(self.quiet - ok, 0)
+            if ok == len(batch):
+                delay, deadline = 0.02, loop.time() + wait
+                continue
+            status = got[ok] if ok < len(got) else None
+            if status == Status.NO_APP:
+                raise NoApp("no ABI 1.1 app runs" + ("" if self.slot == ANY else f" in slot {self.slot}"))
+            if status is not None and status not in RETRY:
+                raise ValueError(f"watch refused the message: {Status(status).name}")
+            self.quiet, self.refused = self.calm, self.refused + 1
+            while not self.session.frames.empty():  # late replies of the lost batch
+                self.session.frames.get_nowait()
+            if loop.time() + delay > deadline:
+                raise TimeoutError(f"app inbox still busy after {wait}s")
+            await asyncio.sleep(delay)
+            delay = min(delay * 2, 0.25)
+
+
+    async def stream(self, msgs: list[bytes], limit=None, idle=None, after=None, wait: float = 10.0) -> None:
+        """Like send, but a sliding window: a new frame goes out as each reply comes back, so WINDOW frames stay in
+        flight instead of WINDOW per round trip. Replies come back in frame order. `limit()` caps how many of
+        `msgs` may be out so far (credit), `idle()` is awaited when it allows none and nothing is in flight,
+        `after(sent)` runs after each reply. A refused frame is sent again behind the ones in flight, so it may
+        land after later ones: for sequence-numbered streams."""
+        loop = asyncio.get_running_loop()
+        retry: list[int] = []
+        flight: list[int] = []
+        nxt, done = 0, 0
+        delay, deadline = 0.02, loop.time() + wait
+        while done < len(msgs):
+            cap = len(msgs) if limit is None else min(limit(), len(msgs))
+            while len(flight) < self.window and (retry or nxt < cap):
+                k = retry.pop(0) if retry else nxt
+                if k == nxt:
+                    nxt += 1
+                await self.session.gatt.write(link.CMD_W, link.frame(SYSTEM, MSG, bytes([self.slot]) + msgs[k],
+                                                                     self.session.key), response=False)
+                flight.append(k)
+            if not flight:
+                await idle()
+                continue
+            try:
+                (status,) = await self._replies(1, 3.0)
+            except TimeoutError:
+                retry[:0], flight = flight, []  # lost on the way: all of them again
+                continue
+            k = flight.pop(0)
+            if status == Status.OK:
+                done += 1
+                delay, deadline = 0.02, loop.time() + wait
+                if after:
+                    await after(nxt)
+                continue
+            if status == Status.NO_APP:
+                raise NoApp("no ABI 1.1 app runs" + ("" if self.slot == ANY else f" in slot {self.slot}"))
+            if status not in RETRY:
+                raise ValueError(f"watch refused the message: {Status(status).name}")
+            self.refused += 1
+            retry.append(k)
+            if loop.time() + delay > deadline:
+                raise TimeoutError(f"app inbox still busy after {wait}s")
+            await asyncio.sleep(delay)
+            delay = min(delay * 2, 0.25)
+
+
 async def recv(session, timeout: float | None = None, poll: float = 0.25) -> Message:
     """Next EVENT; the watch sends them after a host frame, so this PINGs every `poll` s while it waits."""
     async with asyncio.timeout(timeout):
@@ -233,3 +342,12 @@ class SimChannel:
                     continue
                 self._seq = (self._seq + 1) & 0xFF
                 return Message(self._seq, 0, bytes.fromhex(line.decode().strip()))
+
+
+async def send_when_open(ch, data: bytes, every: float = 2.0) -> None:
+    """Send once the watch app runs: a host started before its app was opened waits for it."""
+    while True:
+        try:
+            return await ch.send(data)
+        except NoApp:
+            await asyncio.sleep(every)

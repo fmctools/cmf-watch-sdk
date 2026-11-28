@@ -126,7 +126,8 @@ pub fn run(sim: &Sim) -> End {
             return e;
         }
         let dim = st.paused;
-        for (i, &c) in st.shown.iter().enumerate() {
+        let panel = st.panel();
+        for (i, &c) in panel.iter().enumerate() {
             buf[i] = if !on_panel(i % W, i / W) {
                 BEZEL
             } else if dim {

@@ -47,6 +47,14 @@ name = "cmf-wp2-app"
 version = "0.1.0"
 
 [[package]]
+name = "cmf-wp2-ui"
+version = "0.1.0"
+dependencies = [
+ "cmf-wp2-app",
+ "wp2-core",
+]
+
+[[package]]
 name = "console_error_panic_hook"
 version = "0.1.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -790,6 +798,7 @@ name = "wp2-sim"
 version = "0.1.0"
 dependencies = [
  "cmf-wp2-app",
+ "cmf-wp2-ui",
  "minifb",
  "png",
  "wp2-core",

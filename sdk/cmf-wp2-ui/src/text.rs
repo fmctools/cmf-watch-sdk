@@ -159,6 +159,42 @@ pub fn big(s: &mut impl Surface, x: i32, y: i32, text: &str, scale: i32, c: u16)
     }
 }
 
+/// Dot-matrix text (the Nothing look): each font pixel is a `dot`-px square on a `pitch`-px grid, so `8 · pitch`
+/// px per char with gaps between the dots.
+pub fn dots(s: &mut impl Surface, x: i32, y: i32, text: &str, pitch: i32, dot: i32, c: u16) {
+    for (i, ch) in text.chars().enumerate() {
+        let g = glyph(ch);
+        let gx = x + i as i32 * 8 * pitch;
+        for (row, bits) in g.iter().enumerate() {
+            for col in 0..8 {
+                if bits >> col & 1 != 0 {
+                    s.rect(gx + col * pitch, y + row as i32 * pitch, dot, dot, c);
+                }
+            }
+        }
+    }
+}
+
+/// [`dots`] with the off dots painted `bg`: a new text drawn over an old one at the same pitch replaces it without
+/// clearing first (a clear shows on the panel as a flicker).
+pub fn dots_opaque(s: &mut impl Surface, x: i32, y: i32, text: &str, pitch: i32, dot: i32, c: u16, bg: u16) {
+    for (i, ch) in text.chars().enumerate() {
+        let g = glyph(ch);
+        let gx = x + i as i32 * 8 * pitch;
+        for (row, bits) in g.iter().enumerate() {
+            for col in 0..8 {
+                let on = bits >> col & 1 != 0;
+                s.rect(gx + col * pitch, y + row as i32 * pitch, dot, dot, if on { c } else { bg });
+            }
+        }
+    }
+}
+
+/// [`dots`] centred on `cx`.
+pub fn dots_centre(s: &mut impl Surface, cx: i32, y: i32, text: &str, pitch: i32, dot: i32, c: u16) {
+    dots(s, cx - chars(text) as i32 * 4 * pitch, y, text, pitch, dot, c);
+}
+
 pub fn big_width(text: &str, scale: i32) -> i32 {
     chars(text) as i32 * 8 * scale
 }

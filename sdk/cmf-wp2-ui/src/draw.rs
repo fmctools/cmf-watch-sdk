@@ -660,3 +660,32 @@ mod tests {
         assert_eq!(b.at(10, 10), 0xFFFF);
     }
 }
+
+/// The round scroll bar of the stock lists (the Apps menu's `jx_scroll_bar`): a short grey arc on the right edge with
+/// a white thumb, round ends. `at` of `max` scrolled (0..=max), `view`: how much shows at once (same unit); nothing
+/// when it does not scroll. Repaints the whole bar, so it can be drawn again after a scroll without clearing.
+/// A row of pixels at a time between two circles (no arc code of its own: the apps using it are near their limit).
+pub fn scroll_bar(s: &mut impl Surface, at: i32, max: i32, view: i32, bg: Rgb) {
+    if max <= 0 {
+        return;
+    }
+    // rows -H..=H about the centre (±24°), between radius 220 and 226
+    const H: i32 = 90;
+    const R0: i32 = 220;
+    const R1: i32 = 226;
+    let len = 2 * H;
+    let thumb = (len * view / (max + view)).clamp(len / 5, len);
+    let t0 = -H + (len - thumb) * at.clamp(0, max) / max;
+    let (white, grey) = (Rgb(0xFF, 0xFF, 0xFF), Rgb(0x3A, 0x3A, 0x3A));
+    let x = |r: i32, dy: i32| crate::C + isqrt(r * r - dy * dy);
+    for dy in -H..=H {
+        let c = if (t0..=t0 + thumb).contains(&dy) { white } else { grey };
+        let (x0, x1) = (x(R0, dy), x(R1, dy));
+        s.rect(x0, crate::C + dy, x1 - x0, 1, c.rgb565());
+    }
+    // round ends: the bar's, then the thumb's
+    for (dy, c) in [(-H, grey), (H, grey), (t0, white), (t0 + thumb, white)] {
+        let xm = (x(R0, dy) + x(R1, dy)) / 2;
+        disc(s, xm, crate::C + dy, (R1 - R0) / 2, c, bg);
+    }
+}

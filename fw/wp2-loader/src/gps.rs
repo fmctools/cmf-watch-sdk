@@ -33,7 +33,9 @@ fn stock_on() -> bool {
 
 // UI thread
 pub fn tick(running: bool, paused: bool) {
-    let want = WANT.load(Ordering::Acquire) && running && !paused;
+    // a pause (a popup over the app) keeps it, as the stock workouts do: a restart would lose the fix
+    let _ = paused;
+    let want = WANT.load(Ordering::Acquire) && running;
     let s = unsafe { (*addr_of_mut!(HOLD)).tick(millis(), want, stock_on()) };
     if s.start {
         set_mode(MODE_ON);
@@ -86,6 +88,15 @@ pub fn due() -> Option<Event> {
     }
     EMIT_AT.store(now, Ordering::Relaxed);
     Some(gps::event(&read()))
+}
+
+/// UI thread: the status bar's bars while the app holds the GPS (0 looking, 1-3), None when it doesn't.
+pub fn level() -> Option<u8> {
+    if !ON.load(Ordering::Acquire) {
+        return None;
+    }
+    let f = read();
+    Some(crate::status::bars(f[16], f[17]))
 }
 
 // UI thread, app thread aborted

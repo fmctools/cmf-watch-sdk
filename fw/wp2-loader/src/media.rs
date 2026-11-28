@@ -28,14 +28,23 @@ struct State {
     info: [u8; 0x82],
 }
 static mut STATE: State = State { polled_at: 0, last: None, info: [0; 0x82] };
-// the getter's out buffer: the stock reads into 504 B for every property
-static mut OUT: [u32; 128] = [0; 128];
+// the getter's out buffer: the stock reads into 504 B for every property. From the RES heap at the first read while
+// an app uses music, back in `stop` (the app ended), so the loader's 64 KiB block doesn't carry it.
+static mut OUT: *mut [u32; 128] = core::ptr::null_mut();
+// what a read answers when the heap had no room: nothing playing, no link
+static NONE: [u32; 1] = [0];
 
-pub fn get(prop: u32) -> &'static [u32; 128] {
-    let out = unsafe { &mut *addr_of_mut!(OUT) };
-    out[0] = 0;
-    stock!(UX2SYS_GET, fn(u32, *mut u32))(prop, out.as_mut_ptr());
-    out
+/// The property's words; when the heap has no room, only word 0 (0) is meaningful.
+pub fn get(prop: u32) -> &'static [u32] {
+    unsafe {
+        if OUT.is_null() {
+            OUT = wp2_core::heap::alloc(wp2_core::heap::RES, 512, 4).cast();
+        }
+        let Some(out) = OUT.as_mut() else { return &NONE };
+        out[0] = 0;
+        stock!(UX2SYS_GET, fn(u32, *mut u32))(prop, out.as_mut_ptr());
+        out
+    }
 }
 
 /// UI thread: the phone link and its media are up.
@@ -50,7 +59,11 @@ pub fn playing() -> bool {
 
 /// UI thread: ux2sys 0x4F (title, artist; `lvcmd::media_info`).
 pub fn info() -> &'static [u8; 0x82] {
-    unsafe { &*(get(PROP_MEDIA_INFO).as_ptr() as *const [u8; 0x82]) }
+    let w = get(PROP_MEDIA_INFO);
+    if w.len() * 4 < 0x82 {
+        return unsafe { &*addr_of_mut!(STATE.info) };
+    }
+    unsafe { &*(w.as_ptr() as *const [u8; 0x82]) }
 }
 
 /// UI thread: sends a media key (the caller checked `available`).
@@ -125,6 +138,14 @@ pub fn tick(running: bool, paused: bool) {
 }
 
 // UI thread, app thread aborted
+/// UI thread, the app gone (lv::teardown, after the music tile's objects): the getter's buffer back to the heap.
+pub fn release() {
+    unsafe {
+        let p = core::mem::replace(&mut *addr_of_mut!(OUT), core::ptr::null_mut());
+        wp2_core::heap::free(wp2_core::heap::RES, p.cast());
+    }
+}
+
 pub fn stop() {
     BOUND.store(false, Ordering::Release);
     CMD.store(0, Ordering::Relaxed);

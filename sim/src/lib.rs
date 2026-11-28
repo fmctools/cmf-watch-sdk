@@ -240,7 +240,15 @@ pub struct State {
     pub sent: VecDeque<String>,
     log: out::Log,
     tcp: Option<TcpStream>,
+    /// the app holds the GPS (SENSOR record 2): a GPS event every GPS_MS from `gps_at`
+    gps_on: bool,
+    gps_at: u32,
+    /// the receiver's latest: lat_e7, lon_e7, alt_dm, fix, sats (script `gps`)
+    gps: (i32, i32, i32, u8, u8),
 }
+
+/// The loader's GPS event period (wp2_core::gps::EMIT_MS).
+const GPS_MS: u32 = 1000;
 
 impl State {
     pub fn new(cfg: Config) -> State {
@@ -277,6 +285,9 @@ impl State {
             sent: VecDeque::new(),
             log,
             tcp: None,
+            gps_on: false,
+            gps_at: 0,
+            gps: (0, 0, 0, 0, 0),
         }
     }
 
@@ -312,6 +323,13 @@ impl State {
                 self.deliver(&m);
             }
         }
+        if self.gps_on && !self.paused && now >= self.gps_at {
+            self.gps_at = now + GPS_MS;
+            let (.., fix, sats) = self.gps;
+            if self.queue.len() < QUEUE_MAX {
+                self.queue.push_back(Event { kind: cmf_wp2_app::GPS, x: fix.into(), y: sats.into(), ..Event::default() });
+            }
+        }
         if self.since != 0 && pwm::over_cap(now, self.since) {
             self.since = 0;
             self.motor = None;
@@ -335,6 +353,7 @@ impl State {
                 .filter(|_| !(self.owned && self.consumed))
                 .map(|b| if self.owned { b.max(self.event_at) + HANG_MS } else { b + ESCAPE_MS }),
             (!self.outbox.is_empty()).then(|| self.polled + POLL_MS),
+            (self.gps_on && !self.paused).then_some(self.gps_at),
             self.cfg.until,
         ]
         .into_iter()
@@ -368,6 +387,10 @@ impl State {
                 }
             }
             Action::Shot(name) => self.shot(&name),
+            Action::Gps(lat, lon, alt, fix, sats) => {
+                self.gps = (lat, lon, alt, fix, sats);
+                self.log("gps", &[("fix", V::I(fix.into())), ("sats", V::I(sats.into()))]);
+            }
         }
     }
 
@@ -456,10 +479,48 @@ impl State {
         ]);
     }
 
+    /// The panel as the watch shows it: the app's frame with the loader's status bar over it (fw status.rs: the
+    /// GPS bars while the app holds the GPS, the time; the stock 24 px font there, the SDK's here).
+    pub fn panel(&self) -> Vec<u16> {
+        struct Px<'a>(&'a mut [u16]);
+        impl cmf_wp2_ui::Surface for Px<'_> {
+            fn rect(&mut self, x: i32, y: i32, w: i32, h: i32, c: u16) {
+                for yy in y.max(0)..(y + h).min(H as i32) {
+                    for xx in x.max(0)..(x + w).min(W as i32) {
+                        self.0[yy as usize * W + xx as usize] = c;
+                    }
+                }
+            }
+            fn text(&mut self, _: i32, _: i32, _: &str, _: u16) {}
+        }
+        let mut px = self.shown.clone();
+        let t = self.time().map_or("--:--".to_string(), |t| format!("{}:{:02}", if t.hour % 12 == 0 { 12 } else { t.hour % 12 }, t.minute));
+        let bars = self.gps_on.then(|| match (self.gps.3, self.gps.4) {
+            (0, _) => 0,
+            (_, 8..) => 3,
+            (_, 5..) => 2,
+            _ => 1,
+        });
+        let mut s = Px(&mut px);
+        let tw = cmf_wp2_ui::font::width(&t);
+        // fw status.rs: bars 3 × 3 px, 3 px apart, then the time in a 72 px box, centred; top 4
+        let (lw, bw) = (72, 15);
+        let x0 = 233 - if bars.is_some() { (bw + lw) / 2 } else { lw / 2 };
+        if let Some(l) = bars {
+            for i in 0..3 {
+                let c = if i < l { 0xFFFF } else { 0x4208 };
+                cmf_wp2_ui::Surface::rect(&mut s, x0 + i * 6, 9, 3, 17, c);
+            }
+        }
+        let lx = if bars.is_some() { x0 + bw } else { x0 };
+        cmf_wp2_ui::font::draw(&mut s, lx + (lw - tw) / 2, 5, &t, 0xFFFF);
+        px
+    }
+
     pub fn shot(&mut self, name: &str) {
         let Some(dir) = self.cfg.frames.clone() else { return };
         let path = dir.join(format!("{name}.png"));
-        let rc = out::png(&path, &self.shown);
+        let rc = out::png(&path, &self.panel());
         self.log("shot", &[("file", V::S(&path.to_string_lossy())), ("ok", V::B(rc.is_ok()))]);
     }
 
@@ -813,9 +874,192 @@ extern "C" fn own_back(on: bool) {
     call(|s| s.own_back(on))
 }
 
-/// ABI 1.2: LVGL apps are not simulated (a later plan).
-extern "C" fn lv_submit(_: *const u8, _: usize) -> i32 {
-    -95
+/// The speaker and mic. The speaker takes everything at once and keeps it in the store's `played.raw` (16-bit
+/// mono at the opened rate); the mic plays `runs/sim/mic.raw` (16 kHz mono 16-bit, looped; a 440 Hz tone without
+/// it) at the clock's pace, at most 256 ms kept, as the loader's.
+static MIC: Mutex<Option<(u32, u64, Vec<i16>)>> = Mutex::new(None);
+
+fn audio(cmd: wp2_core::lvcmd::AudioCmd) -> i32 {
+    use wp2_core::lvcmd::AudioCmd as A;
+    match cmd {
+        A::Open { .. } => {
+            let _ = fs::remove_file(sim().lock().cfg.store.join("played.raw"));
+            0
+        }
+        A::Close | A::Volume { .. } | A::State => 0,
+        // a 32-bit pointer means nothing here
+        A::Write { .. } | A::MicRead { .. } => -22,
+        A::MicOpen => {
+            let root = std::env::var("WP2_SIM_ROOT").unwrap_or_default();
+            let src = fs::read(std::path::Path::new(&root).join("runs/sim/mic.raw"))
+                .map(|d| d.chunks_exact(2).map(|b| i16::from_le_bytes([b[0], b[1]])).collect::<Vec<_>>())
+                .ok()
+                .filter(|v| !v.is_empty())
+                .unwrap_or_else(|| (0..16000).map(|i| ((i as f32 * 440.0 * std::f32::consts::TAU / 16000.0).sin() * 8000.0) as i16).collect());
+            let now = sim().lock().now();
+            *MIC.lock().unwrap() = Some((now, 0, src));
+            0
+        }
+        A::MicClose => {
+            *MIC.lock().unwrap() = None;
+            0
+        }
+    }
+}
+
+/// AUDIO write (op 2) and MIC read (op 7) with the app's host pointer.
+fn audio_host(op: u8, ptr: usize, len: usize) -> i32 {
+    if op == 2 {
+        let data = unsafe { std::slice::from_raw_parts(ptr as *const u8, len) }.to_vec();
+        let p = sim().lock().cfg.store.join("played.raw");
+        if let Ok(mut f) = fs::OpenOptions::new().create(true).append(true).open(p) {
+            let _ = f.write_all(&data);
+        }
+        return len as i32;
+    }
+    let now = sim().lock().now();
+    let mut m = MIC.lock().unwrap();
+    let Some((t0, taken, src)) = m.as_mut() else { return 0 };
+    let made = u64::from(now.wrapping_sub(*t0)) * 16;
+    // the loader keeps 4096 samples: older ones are gone
+    *taken = (*taken).max(made.saturating_sub(4096));
+    let n = ((made - *taken) as usize).min(len / 2);
+    let out = unsafe { std::slice::from_raw_parts_mut(ptr as *mut u8, n * 2) };
+    for i in 0..n {
+        let v = src[((*taken as usize) + i) % src.len()];
+        out[i * 2..i * 2 + 2].copy_from_slice(&v.to_le_bytes());
+    }
+    *taken += n as u64;
+    (n * 2) as i32
+}
+
+/// The storage service's scan of the sim: `files/` as `/NAND:/wp2apps/0_<name>`, collected whole at once.
+fn storage(rec: &mut [u8]) -> i32 {
+    static SCAN: Mutex<Vec<(String, u32)>> = Mutex::new(Vec::new());
+    let (op, index) = (rec[4], usize::from(u16::from_le_bytes([rec[5], rec[6]])));
+    let out = &mut rec[8..];
+    out.fill(0);
+    match op {
+        0 => {
+            out[0] = 1;
+            out[2] = 16;
+            out[4] = 96;
+            out[6] = 16;
+            out[8] = 96;
+        }
+        5 => {
+            let dir = sim().lock().cfg.store.join("files");
+            let mut v: Vec<(String, u32)> = fs::read_dir(dir)
+                .map(|d| d.flatten().map(|e| (format!("/NAND:/wp2apps/0_{}", e.file_name().to_string_lossy()), e.metadata().map(|m| m.len() as u32).unwrap_or(0))).collect())
+                .unwrap_or_default();
+            v.sort();
+            *SCAN.lock().unwrap() = v;
+        }
+        6 => {
+            let n = SCAN.lock().unwrap().len();
+            out[..2].copy_from_slice(&(n.min(96) as u16).to_le_bytes());
+            out[2] = 1;
+            out[3] = u8::from(n > 96);
+        }
+        7 => SCAN.lock().unwrap().clear(),
+        8 => {
+            let v = SCAN.lock().unwrap();
+            let Some((p, size)) = v.get(index) else { return -22 };
+            out[..4].copy_from_slice(&size.to_le_bytes());
+            let b = p.as_bytes();
+            out[4..4 + b.len().min(95)].copy_from_slice(&b[..b.len().min(95)]);
+        }
+        1..=4 => return -95,
+        _ => return -22,
+    }
+    0
+}
+
+/// ABI 1.2: LVGL apps are not simulated (a later plan); FILE records (offline data) are: runs/sim/<app>/files/.
+extern "C" fn lv_submit(buf: *const u8, len: usize) -> i32 {
+    use wp2_core::lvcmd::{file, FileCmd};
+    if buf.is_null() || len == 0 {
+        return -95; // an empty batch: nothing LVGL to run
+    }
+    let rec = unsafe { std::slice::from_raw_parts_mut(buf as *mut u8, len) };
+    // storage inspection v1 (docs/storage-inspection.md), enough for a scan: the app's files as slot 0's
+    if len == 132 && rec[..4] == [0x19, 128, 0, 0] {
+        return storage(rec);
+    }
+    // GPS (loader of 2026-11-19): SENSOR record 2 on/off, GPS_FIX record 0x18 the latest fix
+    if let [0x13, 2, 0, 0, 2, on @ (0 | 1)] = *rec {
+        let mut st = sim().lock();
+        st.gps_on = on == 1;
+        st.gps_at = st.now();
+        st.log("gps_hold", &[("on", V::B(on == 1))]);
+        return 0;
+    }
+    if wp2_core::lvcmd::gps_fix(rec) {
+        let st = sim().lock();
+        if !st.gps_on {
+            return -1;
+        }
+        let (lat, lon, alt, fix, sats) = st.gps;
+        let p = &mut rec[4..];
+        p[0..4].copy_from_slice(&lat.to_le_bytes());
+        p[4..8].copy_from_slice(&lon.to_le_bytes());
+        p[8..12].copy_from_slice(&alt.to_le_bytes());
+        p[12..16].copy_from_slice(&st.now().to_le_bytes());
+        p[16] = fix;
+        p[17] = sats;
+        p[18..20].copy_from_slice(&(if fix > 0 { 30u16 } else { 0 }).to_le_bytes());
+        return 0;
+    }
+    // AUDIO write / MIC read with a host pointer (cmf_wp2_app pcm_record)
+    if let [0x18, 13, 0, 0, op @ (2 | 7), ref rest @ ..] = *rec {
+        if rest.len() == 12 {
+            let ptr = u64::from_le_bytes(rest[..8].try_into().unwrap());
+            let len = u32::from_le_bytes(rest[8..].try_into().unwrap());
+            return audio_host(op, ptr as usize, len as usize);
+        }
+    }
+    if let Some(cmd) = wp2_core::lvcmd::audio(rec) {
+        return audio(cmd);
+    }
+    let Some(cmd) = file(unsafe { std::slice::from_raw_parts(buf, len) }) else { return -95 };
+    let dir = sim().lock().cfg.store.join("files");
+    let _ = fs::create_dir_all(&dir);
+    let name = |n: &[u8]| dir.join(String::from_utf8_lossy(n).into_owned());
+    match cmd {
+        FileCmd::Read { name: n, skip } => match fs::read(name(n)) {
+            Ok(d) => {
+                let from = (skip as usize).min(d.len());
+                let k = (d.len() - from).min(rec.len());
+                rec[..k].copy_from_slice(&d[from..from + k]);
+                k as i32
+            }
+            Err(_) => -2,
+        },
+        FileCmd::Write { name: n, data, append } => {
+            let data = data.to_vec();
+            let mut f = match fs::OpenOptions::new().create(true).write(true).append(append).truncate(!append).open(name(n)) {
+                Ok(f) => f,
+                Err(_) => return E_IO,
+            };
+            if f.write_all(&data).is_ok() { data.len() as i32 } else { E_IO }
+        }
+        FileCmd::Delete { name: n } => {
+            if fs::remove_file(name(n)).is_ok() { 0 } else { -2 }
+        }
+        // the watch's own emoji font, if one was put at runs/sim/emoji28.font (a vendor file: never committed)
+        FileCmd::Emoji { skip } => {
+            let root = std::env::var("WP2_SIM_ROOT").unwrap_or_default();
+            match fs::read(std::path::Path::new(&root).join("runs/sim/emoji28.font")) {
+                Ok(d) => {
+                    let from = (skip as usize).min(d.len());
+                    let k = (d.len() - from).min(rec.len());
+                    rec[..k].copy_from_slice(&d[from..from + k]);
+                    k as i32
+                }
+                Err(_) => -2,
+            }
+        }
+    }
 }
 
 static API: Api = Api {
